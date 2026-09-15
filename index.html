@@ -641,8 +641,10 @@
    3. Supporting documents upload to the "Finance Documents" folder inside
       the "Process Improvement" document library on this site (not the
       default "Documents" library) — that library must already exist;
-      the app creates the Finance Documents/Department/RequestID
-      subfolders on its own the first time they're needed.
+      the app creates the Finance Documents/PeriodFolder/Department/RequestID
+      subfolders on its own the first time they're needed. PeriodFolder is a
+      semi-monthly cutoff folder (e.g. "12th Sep 2026", "22th Sep 2026") —
+      see getPeriodFolderName().
    4. Fill in the values below. */
 const TENANT_ID = "ab7c8c1e-dc1d-431f-ba8b-e4de2b047f8b"; // Directory (tenant) ID — "Finance AP Request" app registration
 const CLIENT_ID = "15ab80ca-fab7-4755-9f9b-5275c47dec90"; // Application (client) ID — "Finance AP Request" app registration
@@ -650,7 +652,7 @@ const SP_HOSTNAME = "saxonrenewables.sharepoint.com";    // your SharePoint tena
 const SP_SITE_PATH = "/sites/Operations";                // the site the list & document library live on
 const SP_LIST_NAME = "Finance AP Record";                // must match the SharePoint list's display name exactly
 const SP_DOC_LIBRARY_NAME = "Process Improvement";       // the document library (not the site's default "Documents") that holds the upload folder
-const DOC_LIBRARY_ROOT = "Finance Documents";            // folder inside that library — uploads land in DOC_LIBRARY_ROOT/Department/RequestID
+const DOC_LIBRARY_ROOT = "Finance Documents";            // folder inside that library — uploads land in DOC_LIBRARY_ROOT/PeriodFolder/Department/RequestID
 const GRAPH_SCOPES = ["Sites.ReadWrite.All", "User.Read", "Mail.Send"];
 const SP_ROLES_LIST_NAME = "AP System Roles";            // second SharePoint list — holds department approvers + Finance team, editable from the User Management tab
 
@@ -1121,9 +1123,28 @@ async function uploadOneFile(folderPath, file){
   );
   return { name: item.name || stampedName, url: item.webUrl };
 }
+/* Two folders per month, named after the semi-monthly cutoff they lead up to:
+   - days 12–22   -> "22th <Mon> <Year>" (current month)
+   - days 23–end  -> "12th <Mon> <Year>" (NEXT month's cutoff)
+   - days 1–11    -> "12th <Mon> <Year>" (this month's cutoff)
+   e.g. Sep 15, 2026 -> "22th Sep 2026"; Sep 25, 2026 -> "12th Oct 2026". */
+function getPeriodFolderName(date){
+  const d = date || new Date();
+  const day = d.getDate();
+  const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  let month = d.getMonth();
+  let year = d.getFullYear();
+  if (day >= 12 && day <= 22) return '22th ' + monthNames[month] + ' ' + year;
+  if (day >= 23) {
+    month += 1;
+    if (month > 11) { month = 0; year += 1; }
+  }
+  return '12th ' + monthNames[month] + ' ' + year;
+}
 async function uploadFilesForRequest(department, requestId, files){
   if (!files.length) return [];
-  const folderPath = DOC_LIBRARY_ROOT + '/' + department + '/' + requestId;
+  const periodFolder = getPeriodFolderName();
+  const folderPath = DOC_LIBRARY_ROOT + '/' + periodFolder + '/' + department + '/' + requestId;
   await ensureFolderPath(folderPath);
   const uploaded = [];
   for (const f of files) uploaded.push(await uploadOneFile(folderPath, f));
