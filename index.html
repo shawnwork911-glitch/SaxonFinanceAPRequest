@@ -353,7 +353,7 @@
             <option value="">— choose —</option>
             <option value="Marketing">Marketing</option>
             <option value="Operations">Operations</option>
-            <option value="HR">HR</option>
+            <option value="HR Admin">HR Admin</option>
           </select>
         </div>
         <div class="field-row">
@@ -369,7 +369,7 @@
           <input class="text-field" type="text" id="f-payment-terms" placeholder="e.g. Net 30">
         </div>
         <div class="field-row">
-          <label class="field-label">Invoice Date</label>
+          <label class="field-label">Document Date</label>
           <input class="text-field" type="date" id="f-invoice-date">
         </div>
         <div class="field-row">
@@ -454,7 +454,7 @@
             <option value="">All departments</option>
             <option value="Marketing">Marketing</option>
             <option value="Operations">Operations</option>
-            <option value="HR">HR</option>
+            <option value="HR Admin">HR Admin</option>
           </select>
           <button type="button" class="btn btn-ghost" onclick="refreshAll()">Refresh</button>
         </div>
@@ -483,7 +483,7 @@
             <option value="">All departments</option>
             <option value="Marketing">Marketing</option>
             <option value="Operations">Operations</option>
-            <option value="HR">HR</option>
+            <option value="HR Admin">HR Admin</option>
           </select>
           <button type="button" class="btn btn-ghost" onclick="refreshAll()">Refresh</button>
         </div>
@@ -515,7 +515,7 @@
             <option value="">All departments</option>
             <option value="Marketing">Marketing</option>
             <option value="Operations">Operations</option>
-            <option value="HR">HR</option>
+            <option value="HR Admin">HR Admin</option>
           </select>
         </div>
       </div>
@@ -546,7 +546,7 @@
   <div class="view" id="view-admin">
     <div class="card" id="admin-list-warning" style="display:none; border-left: 3px solid var(--warn); background: var(--warn-bg);">
       <strong>The "AP System Roles" list wasn't found on this site.</strong>
-      <div class="field-hint" style="margin-top:6px;">Create a SharePoint list named exactly <code>AP System Roles</code> on the same site as your requests list, with columns: <code>RoleType</code> (Choice: "Department Approver", "Finance Team", "Urgent Payment Approver", "Requester Department"), <code>Department</code> (Choice: Marketing/Operations/HR — leave blank for Finance Team and Urgent Payment Approver rows), <code>Email</code> (Single line of text). Then click Recheck below.</div>
+      <div class="field-hint" style="margin-top:6px;">Create a SharePoint list named exactly <code>AP System Roles</code> on the same site as your requests list, with columns: <code>RoleType</code> (Choice: "Department Approver", "Finance Team", "Urgent Payment Approver", "Requester Department"), <code>Department</code> (Choice: Marketing/Operations/HR Admin — leave blank for Finance Team and Urgent Payment Approver rows), <code>Email</code> (Single line of text). Then click Recheck below.</div>
       <div class="btn-row" style="justify-content:flex-start; margin-top:10px;">
         <button type="button" class="btn btn-ghost" onclick="recheckRolesList()">Recheck</button>
       </div>
@@ -663,7 +663,7 @@ const SP_ROLES_LIST_NAME = "AP System Roles";            // second SharePoint li
 const DEPARTMENTS = {
   "Marketing":  { approverEmail: "marketing.approver@saxonrenewables.com" },
   "Operations": { approverEmail: "operations.approver@saxonrenewables.com" },
-  "HR":         { approverEmail: "hr.approver@saxonrenewables.com" }
+  "HR Admin":   { approverEmail: "hr.approver@saxonrenewables.com" }
 };
 const FINANCE_TEAM = [
   "finance1@saxonrenewables.com",
@@ -1675,7 +1675,7 @@ function baseDetailGrid(record){
       '<div><div class="k">Submitted</div>' + fmtDateTime(record.submittedDate) + '</div>' +
       '<div><div class="k">Vendor</div>' + escapeHtml(record.vendorName) + '</div>' +
       '<div><div class="k">Document number</div>' + escapeHtml(record.invoiceNumber || '—') + '</div>' +
-      '<div><div class="k">Invoice date</div>' + fmtDate(record.invoiceDate) + '</div>' +
+      '<div><div class="k">Document date</div>' + fmtDate(record.invoiceDate) + '</div>' +
       '<div><div class="k">Amount</div>' + fmtAmount(record.amount, record.currency) + '</div>' +
       '<div><div class="k">Payment terms</div>' + escapeHtml(record.paymentTerms || '—') + '</div>' +
       urgentRow +
