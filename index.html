@@ -361,11 +361,11 @@
           <input class="text-field" type="text" id="f-vendor" placeholder="e.g. Acme Supplies Pte Ltd">
         </div>
         <div class="field-row">
-          <label class="field-label">Invoice Number</label>
-          <input class="text-field" type="text" id="f-invoice-number" placeholder="e.g. INV-10234">
+          <label class="field-label">Document Number</label>
+          <input class="text-field" type="text" id="f-invoice-number" placeholder="e.g. DOC-10234">
         </div>
         <div class="field-row">
-          <label class="field-label">Payment Terms</label>
+          <label class="field-label">Payment Terms <span class="req">*</span></label>
           <input class="text-field" type="text" id="f-payment-terms" placeholder="e.g. Net 30">
         </div>
         <div class="field-row">
@@ -373,15 +373,11 @@
           <input class="text-field" type="date" id="f-invoice-date">
         </div>
         <div class="field-row">
-          <label class="field-label">Due Date <span class="req">*</span></label>
-          <input class="text-field" type="date" id="f-due-date">
-        </div>
-        <div class="field-row">
           <label class="field-label">Amount <span class="req">*</span></label>
           <input class="text-field" type="number" step="0.01" min="0" id="f-amount" placeholder="0.00">
         </div>
         <div class="field-row">
-          <label class="field-label">Currency</label>
+          <label class="field-label">Currency <span class="req">*</span></label>
           <select class="text-field" id="f-currency">
             <option value="SGD">SGD</option>
             <option value="MYR">MYR</option>
@@ -405,7 +401,7 @@
       </div>
 
       <div class="field-row" style="margin-top:10px;">
-        <label class="field-label">Supporting Documents</label>
+        <label class="field-label">Supporting Documents <span class="req">*</span></label>
         <input type="file" id="f-files" multiple>
         <div class="field-hint">Invoice, PO, receipts, etc. Files upload to the department's SharePoint folder when you save or submit.</div>
         <div class="file-chip-list" id="new-file-chip-list"></div>
@@ -440,7 +436,7 @@
         </div>
       </div>
       <table class="data-table">
-        <thead><tr><th>Request ID</th><th>Department</th><th>Vendor</th><th>Amount</th><th>Due date</th><th>Status</th><th>Submitted</th></tr></thead>
+        <thead><tr><th>Request ID</th><th>Department</th><th>Vendor</th><th>Amount</th><th>Status</th><th>Submitted</th></tr></thead>
         <tbody id="mine-table-body"></tbody>
       </table>
     </div>
@@ -462,7 +458,7 @@
         </div>
       </div>
       <table class="data-table">
-        <thead><tr><th>Request ID</th><th>Department</th><th>Requestor</th><th>Vendor</th><th>Amount</th><th>Due date</th><th>Submitted</th></tr></thead>
+        <thead><tr><th>Request ID</th><th>Department</th><th>Requestor</th><th>Vendor</th><th>Amount</th><th>Submitted</th></tr></thead>
         <tbody id="approvals-table-body"></tbody>
       </table>
     </div>
@@ -491,7 +487,7 @@
         </div>
       </div>
       <table class="data-table">
-        <thead><tr><th>Request ID</th><th>Department</th><th>Requestor</th><th>Vendor</th><th>Amount</th><th>Due date</th><th>Approved by</th></tr></thead>
+        <thead><tr><th>Request ID</th><th>Department</th><th>Requestor</th><th>Vendor</th><th>Amount</th><th>Approved by</th></tr></thead>
         <tbody id="finance-table-body"></tbody>
       </table>
     </div>
@@ -1109,13 +1105,19 @@ async function ensureFolderPath(fullPath){
 async function uploadOneFile(folderPath, file){
   if (!docLibraryDriveId) throw new Error('Could not find the "' + SP_DOC_LIBRARY_NAME + '" document library on this site.');
   const safeName = file.name.replace(/[#%*:<>?/\\{|}]/g, '_');
-  const encodedPath = encodeURIComponent(folderPath + '/' + safeName).replace(/%2F/g, '/');
+  // Keep the file's actual name, but stamp a timestamp behind it (before the extension) so
+  // re-uploading a file with the same name never silently overwrites an earlier one.
+  const dot = safeName.lastIndexOf('.');
+  const base = dot > 0 ? safeName.slice(0, dot) : safeName;
+  const ext = dot > 0 ? safeName.slice(dot) : '';
+  const stampedName = base + '_' + fileTimestampSuffix() + ext;
+  const encodedPath = encodeURIComponent(folderPath + '/' + stampedName).replace(/%2F/g, '/');
   const buf = await file.arrayBuffer();
   const item = await graphFetch(
     "/drives/" + docLibraryDriveId + "/root:/" + encodedPath + ":/content?@microsoft.graph.conflictBehavior=replace",
     { method: 'PUT', body: buf, headers: { 'Content-Type': file.type || 'application/octet-stream' } }
   );
-  return { name: file.name, url: item.webUrl };
+  return { name: item.name || stampedName, url: item.webUrl };
 }
 async function uploadFilesForRequest(department, requestId, files){
   if (!files.length) return [];
@@ -1161,6 +1163,12 @@ function genRequestId(){
   return 'AP-' + ymd + '-' + rand;
 }
 function nowIso(){ return new Date().toISOString(); }
+function fileTimestampSuffix(){
+  // Compact, filename-safe local timestamp: YYYYMMDD-HHMMSS
+  const d = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  return d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + '-' + pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds());
+}
 function fmtDate(v){
   if (!v) return '—';
   const d = new Date(v);
@@ -1234,7 +1242,7 @@ function toggleUrgentJustification(){
   document.getElementById('urgent-justification-row').style.display = checked ? '' : 'none';
 }
 function clearNewRequestForm(){
-  ['f-vendor','f-invoice-number','f-payment-terms','f-invoice-date','f-due-date','f-amount','f-description','f-urgent-justification'].forEach(id => {
+  ['f-vendor','f-invoice-number','f-payment-terms','f-invoice-date','f-amount','f-description','f-urgent-justification'].forEach(id => {
     document.getElementById(id).value = '';
   });
   document.getElementById('f-department').value = defaultDepartmentForUser();
@@ -1251,7 +1259,6 @@ function readNewRequestForm(){
     invoiceNumber: document.getElementById('f-invoice-number').value.trim(),
     paymentTerms: document.getElementById('f-payment-terms').value.trim(),
     invoiceDate: document.getElementById('f-invoice-date').value ? new Date(document.getElementById('f-invoice-date').value).toISOString() : '',
-    dueDate: document.getElementById('f-due-date').value ? new Date(document.getElementById('f-due-date').value).toISOString() : '',
     amount: parseFloat(document.getElementById('f-amount').value || '0'),
     currency: document.getElementById('f-currency').value,
     description: document.getElementById('f-description').value.trim(),
@@ -1262,9 +1269,11 @@ function readNewRequestForm(){
 function validateNewRequestForm(form){
   if (!form.department) return 'Please choose a requesting department.';
   if (!form.vendorName) return 'Please enter the vendor name.';
-  if (!form.dueDate) return 'Please enter a due date.';
+  if (!form.paymentTerms) return 'Please enter the payment terms.';
+  if (!form.currency) return 'Please select a currency.';
   if (!form.amount || form.amount <= 0) return 'Please enter an amount greater than zero.';
   if (!form.description) return 'Please describe the purpose of this request.';
+  if (!newRequestFiles.length) return 'Please attach at least one supporting document.';
   if (form.isUrgent && !form.urgentJustification) return 'Please provide a justification for the urgent payment.';
   if (form.isUrgent && !urgentApproverEmail) return 'No Urgent Payment Approver has been configured yet. Contact an admin (User Management tab) before submitting an urgent request.';
   return null;
@@ -1368,9 +1377,9 @@ function renderMineTable(){
   const body = document.getElementById('mine-table-body');
   body.innerHTML = rows.length ? rows.map(r =>
     '<tr' + urgentRowAttr(r) + ' onclick="openDetail(\'' + r.id + '\',\'mine\')"><td>' + escapeHtml(r.requestId) + urgentTag(r) + '</td><td>' + escapeHtml(r.department) +
-    '</td><td>' + escapeHtml(r.vendorName) + '</td><td>' + fmtAmount(r.amount, r.currency) + '</td><td>' + fmtDate(r.dueDate) +
+    '</td><td>' + escapeHtml(r.vendorName) + '</td><td>' + fmtAmount(r.amount, r.currency) +
     '</td><td>' + statusPill(r.status) + '</td><td>' + (r.status === STATUS.DRAFT ? '<span class="muted">draft</span>' : fmtDateTime(r.submittedDate)) + '</td></tr>'
-  ).join('') : '<tr class="empty-row"><td colspan="7">No requests yet.</td></tr>';
+  ).join('') : '<tr class="empty-row"><td colspan="6">No requests yet.</td></tr>';
 
   const drafts = mine.filter(r => r.status === STATUS.DRAFT);
   document.getElementById('draft-card').style.display = drafts.length ? '' : 'none';
@@ -1398,8 +1407,8 @@ function renderApprovalsTable(){
   document.getElementById('approvals-table-body').innerHTML = pending.length ? pending.map(r =>
     '<tr' + urgentRowAttr(r) + ' onclick="openDetail(\'' + r.id + '\',\'approve\')"><td>' + escapeHtml(r.requestId) + urgentTag(r) + '</td><td>' + escapeHtml(r.department) +
     '</td><td>' + escapeHtml(r.requestorName) + '</td><td>' + escapeHtml(r.vendorName) + '</td><td>' + fmtAmount(r.amount, r.currency) +
-    '</td><td>' + fmtDate(r.dueDate) + '</td><td>' + fmtDateTime(r.submittedDate) + '</td></tr>'
-  ).join('') : '<tr class="empty-row"><td colspan="7">Nothing waiting on your approval.</td></tr>';
+    '</td><td>' + fmtDateTime(r.submittedDate) + '</td></tr>'
+  ).join('') : '<tr class="empty-row"><td colspan="6">Nothing waiting on your approval.</td></tr>';
   document.getElementById('approvals-history-body').innerHTML = decided.length ? decided.slice(0, 50).map(r =>
     '<tr' + urgentRowAttr(r) + ' onclick="openDetail(\'' + r.id + '\',\'mine\')"><td>' + escapeHtml(r.requestId) + urgentTag(r) + '</td><td>' + escapeHtml(r.department) +
     '</td><td>' + escapeHtml(r.requestorName) + '</td><td>' + escapeHtml(r.vendorName) + '</td><td>' + fmtAmount(r.amount, r.currency) +
@@ -1419,8 +1428,8 @@ function renderFinanceTable(){
   document.getElementById('finance-table-body').innerHTML = pending.length ? pending.map(r =>
     '<tr' + urgentRowAttr(r) + ' onclick="openDetail(\'' + r.id + '\',\'finance\')"><td>' + escapeHtml(r.requestId) + urgentTag(r) + '</td><td>' + escapeHtml(r.department) +
     '</td><td>' + escapeHtml(r.requestorName) + '</td><td>' + escapeHtml(r.vendorName) + '</td><td>' + fmtAmount(r.amount, r.currency) +
-    '</td><td>' + fmtDate(r.dueDate) + '</td><td>' + escapeHtml(r.approverEmail) + '</td></tr>'
-  ).join('') : '<tr class="empty-row"><td colspan="7">No requests awaiting Finance review.</td></tr>';
+    '</td><td>' + escapeHtml(r.approverEmail) + '</td></tr>'
+  ).join('') : '<tr class="empty-row"><td colspan="6">No requests awaiting Finance review.</td></tr>';
   document.getElementById('finance-history-body').innerHTML = history.length ? history.slice(0, 100).map(r =>
     '<tr' + urgentRowAttr(r) + ' onclick="openDetail(\'' + r.id + '\',\'mine\')"><td>' + escapeHtml(r.requestId) + urgentTag(r) + '</td><td>' + escapeHtml(r.department) +
     '</td><td>' + escapeHtml(r.vendorName) + '</td><td>' + fmtAmount(r.amount, r.currency) + '</td><td>' + statusPill(r.status) +
@@ -1642,9 +1651,8 @@ function baseDetailGrid(record){
       '<div><div class="k">Requestor</div>' + escapeHtml(record.requestorName) + ' &lt;' + escapeHtml(record.requestorEmail) + '&gt;</div>' +
       '<div><div class="k">Submitted</div>' + fmtDateTime(record.submittedDate) + '</div>' +
       '<div><div class="k">Vendor</div>' + escapeHtml(record.vendorName) + '</div>' +
-      '<div><div class="k">Invoice number</div>' + escapeHtml(record.invoiceNumber || '—') + '</div>' +
+      '<div><div class="k">Document number</div>' + escapeHtml(record.invoiceNumber || '—') + '</div>' +
       '<div><div class="k">Invoice date</div>' + fmtDate(record.invoiceDate) + '</div>' +
-      '<div><div class="k">Due date</div>' + fmtDate(record.dueDate) + '</div>' +
       '<div><div class="k">Amount</div>' + fmtAmount(record.amount, record.currency) + '</div>' +
       '<div><div class="k">Payment terms</div>' + escapeHtml(record.paymentTerms || '—') + '</div>' +
       urgentRow +
@@ -1722,8 +1730,9 @@ function renderModalBody(record, mode){
 async function handleSubmitDraft(itemId){
   const record = findRecord(itemId);
   if (!record) return;
-  if (!record.dueDate || !record.amount || !record.description) {
-    showToast('This draft is missing required fields (due date, amount or description) — delete it and re-enter it on the New Request tab.', 'error');
+  const draftDocs = parseDocLinks(record.documentLinks);
+  if (!record.amount || !record.description || !record.paymentTerms || !record.currency || !draftDocs.length) {
+    showToast('This draft is missing required fields (payment terms, currency, amount, description or supporting documents) — delete it and re-enter it on the New Request tab.', 'error');
     return;
   }
   if (record.isUrgent && !urgentApproverEmail) {
@@ -1843,7 +1852,6 @@ async function notifyApproverOfNewRequest(record){
       'Department: ' + escapeHtml(record.department),
       'Vendor: ' + escapeHtml(record.vendorName),
       'Amount: ' + escapeHtml(fmtAmount(record.amount, record.currency)),
-      'Due date: ' + escapeHtml(fmtDate(record.dueDate)),
       'Requestor: ' + escapeHtml(record.requestorName) + ' &lt;' + escapeHtml(record.requestorEmail) + '&gt;',
       record.isUrgent ? ('Urgent justification: ' + escapeHtml(record.urgentJustification || '—')) : '',
       '',
@@ -1866,7 +1874,6 @@ async function notifyFinanceOfApproval(record){
       'Department: ' + escapeHtml(record.department),
       'Vendor: ' + escapeHtml(record.vendorName),
       'Amount: ' + escapeHtml(fmtAmount(record.amount, record.currency)),
-      'Due date: ' + escapeHtml(fmtDate(record.dueDate)),
       'Requestor: ' + escapeHtml(record.requestorName) + ' &lt;' + escapeHtml(record.requestorEmail) + '&gt;',
       'Approved by: ' + escapeHtml(currentAccount.username),
       record.isUrgent ? ('Urgent justification: ' + escapeHtml(record.urgentJustification || '—')) : '',
