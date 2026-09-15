@@ -1,0 +1,1316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Saxon Renewables — AP Request System</title>
+<script src="https://unpkg.com/@azure/msal-browser@3/lib/msal-browser.min.js"></script>
+<style>
+  :root {
+    --ink: #16202b;
+    --sub: #5c6b7a;
+    --line: #dde3ea;
+    --paper: #f7f9fb;
+    --panel: #ffffff;
+    --accent: #1f4e79;
+    --accent-light: #eaf0f7;
+    --good: #1e7a4c;
+    --good-bg: #e7f5ed;
+    --warn: #a56b12;
+    --warn-bg: #fdf1e0;
+    --bad: #a3312a;
+    --bad-bg: #fbeae9;
+    --gold: #b8862f;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    line-height: 1.5;
+    font-size: 15px;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 24px 28px 90px; }
+  a { color: var(--accent); }
+
+  h1, h2, h3 { font-family: inherit; margin: 0; }
+  h1 { font-size: 20px; font-weight: 700; }
+  h2 { font-size: 16px; font-weight: 700; margin-bottom: 4px; }
+  .muted { color: var(--sub); }
+  .small { font-size: 12.5px; }
+
+  /* ---- Top bar / auth ---- */
+  #login-overlay {
+    position: fixed; inset: 0; background: rgba(22,32,43,0.6);
+    display: flex; align-items: center; justify-content: center; z-index: 300;
+  }
+  #login-card {
+    background: var(--panel); border-radius: 10px; padding: 30px 32px; width: 92%; max-width: 380px;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.25);
+  }
+  #login-card h2 { font-size: 19px; margin-bottom: 6px; }
+  #login-card p { font-size: 13.5px; color: var(--sub); margin: 0 0 18px; }
+  #login-error {
+    display: none; font-size: 12.5px; color: var(--bad); background: var(--bad-bg);
+    border: 1px solid #e6b3ae; border-radius: 6px; padding: 9px 11px; margin-bottom: 12px;
+  }
+  #ms-signin-btn {
+    font-size: 14px; font-weight: 700; background: var(--accent); color: #fff;
+    border: none; border-radius: 6px; padding: 11px 18px; cursor: pointer; width: 100%;
+  }
+  #ms-signin-btn:hover { opacity: .9; }
+
+  #top-bar {
+    display: none; align-items: center; justify-content: space-between;
+    padding: 12px 28px; border-bottom: 1px solid var(--line); background: var(--panel);
+    position: sticky; top: 0; z-index: 20;
+  }
+  #top-bar .brand { display: flex; align-items: center; gap: 10px; }
+  #top-bar .brand .logo-dot { width: 12px; height: 12px; border-radius: 3px; background: var(--accent); }
+  #top-bar .brand-text { font-weight: 700; font-size: 15px; }
+  #top-bar .brand-text small { display:block; font-weight:400; color: var(--sub); font-size: 11.5px; }
+  #user-box { display: flex; align-items: center; gap: 14px; }
+  #user-box .who { text-align: right; font-size: 12.5px; }
+  #user-box .who .email { font-weight: 700; color: var(--ink); }
+  .role-badges { display: flex; gap: 6px; margin-top: 2px; justify-content: flex-end; flex-wrap: wrap; }
+  .role-badge {
+    font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em;
+    padding: 2px 7px; border-radius: 10px; background: var(--accent-light); color: var(--accent);
+  }
+  #signout-btn {
+    font-size: 12.5px; background: transparent; color: var(--sub);
+    border: 1px solid var(--line); border-radius: 6px; padding: 7px 13px; cursor: pointer;
+  }
+  #signout-btn:hover { background: var(--paper); }
+
+  /* ---- Tabs ---- */
+  #tabs { display: none; gap: 4px; padding: 14px 28px 0; background: var(--panel); border-bottom: 1px solid var(--line); }
+  .tab-btn {
+    font-size: 13.5px; font-weight: 600; color: var(--sub); background: transparent;
+    border: none; border-bottom: 3px solid transparent; padding: 10px 16px; cursor: pointer;
+  }
+  .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab-btn .count {
+    display: inline-block; margin-left: 6px; background: var(--accent); color: #fff;
+    font-size: 10.5px; font-weight: 700; border-radius: 9px; padding: 1px 6px; min-width: 16px; text-align: center;
+  }
+  .tab-btn .count.zero { background: var(--line); color: var(--sub); }
+
+  .view { display: none; }
+  .view.active { display: block; }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+    padding: 20px 22px; margin-bottom: 18px;
+  }
+  .card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 16px; }
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px 16px; }
+  @media (max-width: 720px) { .grid-2, .grid-3 { grid-template-columns: 1fr; } }
+
+  .field-label { font-size: 12.5px; font-weight: 600; color: var(--sub); margin: 0 0 5px; display:block; }
+  .field-label .req { color: var(--bad); }
+  input.text-field, select.text-field, textarea.text-field {
+    width: 100%; border: 1px solid var(--line); border-radius: 6px; padding: 9px 11px;
+    font-family: inherit; font-size: 14px; background: var(--paper); color: var(--ink);
+  }
+  input.text-field:focus, select.text-field:focus, textarea.text-field:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  textarea.text-field { resize: vertical; min-height: 70px; }
+  .field-row { margin-bottom: 4px; }
+  .field-hint { font-size: 11.5px; color: var(--sub); margin-top: 4px; }
+
+  input[type="file"] {
+    width: 100%; border: 1px dashed var(--line); border-radius: 6px; padding: 12px; background: var(--paper); font-size: 13px;
+  }
+  .file-chip-list { margin-top: 8px; display: flex; flex-direction: column; gap: 5px; }
+  .file-chip {
+    display: flex; align-items: center; justify-content: space-between; background: var(--accent-light);
+    border-radius: 5px; padding: 6px 10px; font-size: 12.5px;
+  }
+  .file-chip .rm { cursor: pointer; color: var(--bad); font-weight: 700; padding: 0 4px; }
+
+  .btn {
+    font-size: 13.5px; font-weight: 700; border: none; border-radius: 6px; padding: 10px 18px;
+    cursor: pointer; letter-spacing: .01em;
+  }
+  .btn:disabled { opacity: .55; cursor: default; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover:not(:disabled) { opacity: .9; }
+  .btn-gold { background: var(--gold); color: #fff; }
+  .btn-gold:hover:not(:disabled) { opacity: .9; }
+  .btn-ghost { background: transparent; color: var(--sub); border: 1px solid var(--line); }
+  .btn-ghost:hover:not(:disabled) { background: var(--paper); }
+  .btn-danger { background: var(--bad); color: #fff; }
+  .btn-danger:hover:not(:disabled) { opacity: .9; }
+  .btn-row { display: flex; gap: 10px; justify-content: flex-end; margin-top: 16px; flex-wrap: wrap; }
+
+  /* ---- Tables ---- */
+  table.data-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  table.data-table th, table.data-table td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  table.data-table thead th {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--sub);
+    border-bottom: 2px solid var(--ink); font-weight: 700;
+  }
+  table.data-table tbody tr { cursor: pointer; }
+  table.data-table tbody tr:hover { background: var(--accent-light); }
+  .empty-row td { text-align: center; color: var(--sub); padding: 30px 12px; cursor: default; }
+  .empty-row:hover { background: transparent !important; }
+
+  .status-pill {
+    display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: .02em;
+    padding: 3px 10px; border-radius: 12px; white-space: nowrap;
+  }
+  .status-draft { background: var(--line); color: var(--sub); }
+  .status-pending-approval { background: var(--warn-bg); color: var(--warn); }
+  .status-rejected-approver { background: var(--bad-bg); color: var(--bad); }
+  .status-pending-finance { background: #e6eef8; color: var(--accent); }
+  .status-processed { background: var(--good-bg); color: var(--good); }
+  .status-rejected-finance { background: var(--bad-bg); color: var(--bad); }
+
+  .toolbar-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+  .toolbar-row .filters { display: flex; gap: 8px; flex-wrap: wrap; }
+  select.filter-select { font-size: 13px; padding: 7px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); }
+
+  /* ---- Toast ---- */
+  #toast {
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+    background: var(--ink); color: #fff; padding: 12px 20px; border-radius: 8px;
+    font-size: 13.5px; z-index: 400; display: none; max-width: 460px; box-shadow: 0 6px 24px rgba(0,0,0,0.3);
+  }
+  #toast.error { background: var(--bad); }
+  #toast.success { background: var(--good); }
+
+  /* ---- Modal ---- */
+  #modal-overlay {
+    display: none; position: fixed; inset: 0; background: rgba(22,32,43,0.55);
+    align-items: flex-start; justify-content: center; z-index: 250; overflow-y: auto; padding: 40px 16px;
+  }
+  #modal-card {
+    background: var(--panel); border-radius: 10px; width: 100%; max-width: 720px;
+    padding: 26px 28px 22px; box-shadow: 0 12px 50px rgba(0,0,0,0.3);
+  }
+  #modal-head { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 6px; }
+  #modal-head h2 { font-size: 18px; }
+  #modal-close-btn {
+    font-size: 12.5px; background: transparent; color: var(--sub); border: 1px solid var(--line);
+    border-radius: 6px; padding: 6px 12px; cursor: pointer;
+  }
+  .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 20px; margin: 14px 0; font-size: 13.5px; }
+  .detail-grid .k { color: var(--sub); font-size: 11.5px; text-transform: uppercase; letter-spacing: .03em; margin-bottom: 2px; }
+  .detail-grid .full { grid-column: 1 / -1; }
+  .doc-link-list { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+  .history-log {
+    background: var(--paper); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px;
+    font-size: 12.5px; white-space: pre-wrap; max-height: 160px; overflow-y: auto; color: var(--sub);
+  }
+  .section-divider { border: none; border-top: 1px solid var(--line); margin: 16px 0; }
+
+  #app-loading { display: none; padding: 60px 0; text-align: center; color: var(--sub); }
+
+  @media print { #top-bar, #tabs, .toolbar-row, .btn-row, #modal-overlay { display: none !important; } }
+</style>
+</head>
+<body>
+
+<div id="login-overlay">
+  <div id="login-card">
+    <h2>AP Request System</h2>
+    <p>Sign in with your Saxon Renewables Microsoft account to submit or process accounts-payable requests.</p>
+    <div id="login-error"></div>
+    <button type="button" id="ms-signin-btn">Sign in with Microsoft</button>
+  </div>
+</div>
+
+<div id="top-bar">
+  <div class="brand">
+    <span class="logo-dot"></span>
+    <span class="brand-text">AP Request System<small>Saxon Renewables — Accounts Payable</small></span>
+  </div>
+  <div id="user-box">
+    <div class="who">
+      <div class="email" id="user-email-label"></div>
+      <div class="role-badges" id="role-badges"></div>
+    </div>
+    <button type="button" id="signout-btn">Sign out</button>
+  </div>
+</div>
+
+<div id="tabs">
+  <button class="tab-btn active" data-view="new" onclick="switchTab('new')">New Request</button>
+  <button class="tab-btn" data-view="mine" onclick="switchTab('mine')">My Requests <span class="count zero" id="count-mine">0</span></button>
+  <button class="tab-btn" data-view="approvals" id="tab-approvals" style="display:none;" onclick="switchTab('approvals')">Approvals <span class="count zero" id="count-approvals">0</span></button>
+  <button class="tab-btn" data-view="finance" id="tab-finance" style="display:none;" onclick="switchTab('finance')">Finance Queue <span class="count zero" id="count-finance">0</span></button>
+  <button class="tab-btn" data-view="admin" id="tab-admin" style="display:none;" onclick="switchTab('admin')">User Management</button>
+</div>
+
+<div class="wrap">
+
+  <div id="app-loading">Loading…</div>
+
+  <!-- ============ NEW REQUEST ============ -->
+  <div class="view active" id="view-new">
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <h2>New AP Request</h2>
+          <div class="muted small">Fill in the details below, attach supporting documents, then save a draft or submit for approval.</div>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="field-row">
+          <label class="field-label">Requesting Department <span class="req">*</span></label>
+          <select class="text-field" id="f-department">
+            <option value="">— choose —</option>
+            <option value="Marketing">Marketing</option>
+            <option value="Operations">Operations</option>
+            <option value="HR">HR</option>
+          </select>
+        </div>
+        <div class="field-row">
+          <label class="field-label">Vendor Name <span class="req">*</span></label>
+          <input class="text-field" type="text" id="f-vendor" placeholder="e.g. Acme Supplies Pte Ltd">
+        </div>
+        <div class="field-row">
+          <label class="field-label">Invoice Number</label>
+          <input class="text-field" type="text" id="f-invoice-number" placeholder="e.g. INV-10234">
+        </div>
+        <div class="field-row">
+          <label class="field-label">Payment Terms</label>
+          <input class="text-field" type="text" id="f-payment-terms" placeholder="e.g. Net 30">
+        </div>
+        <div class="field-row">
+          <label class="field-label">Invoice Date</label>
+          <input class="text-field" type="date" id="f-invoice-date">
+        </div>
+        <div class="field-row">
+          <label class="field-label">Due Date <span class="req">*</span></label>
+          <input class="text-field" type="date" id="f-due-date">
+        </div>
+        <div class="field-row">
+          <label class="field-label">Amount <span class="req">*</span></label>
+          <input class="text-field" type="number" step="0.01" min="0" id="f-amount" placeholder="0.00">
+        </div>
+        <div class="field-row">
+          <label class="field-label">Currency</label>
+          <select class="text-field" id="f-currency">
+            <option value="SGD">SGD</option>
+            <option value="USD">USD</option>
+            <option value="MYR">MYR</option>
+            <option value="EUR">EUR</option>
+            <option value="GBP">GBP</option>
+            <option value="Other">Other</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="field-row" style="margin-top:10px;">
+        <label class="field-label">Description / Purpose <span class="req">*</span></label>
+        <textarea class="text-field" id="f-description" placeholder="What is this payment for?"></textarea>
+      </div>
+
+      <div class="field-row" style="margin-top:10px;">
+        <label class="field-label">Supporting Documents</label>
+        <input type="file" id="f-files" multiple>
+        <div class="field-hint">Invoice, PO, receipts, etc. Files upload to the department's SharePoint folder when you save or submit.</div>
+        <div class="file-chip-list" id="new-file-chip-list"></div>
+      </div>
+
+      <div class="btn-row">
+        <button type="button" class="btn btn-ghost" onclick="clearNewRequestForm()">Clear form</button>
+        <button type="button" class="btn btn-ghost" id="btn-save-draft" onclick="handleSaveDraft()">Save draft</button>
+        <button type="button" class="btn btn-primary" id="btn-submit-request" onclick="handleSubmitRequest()">Submit for approval</button>
+      </div>
+    </div>
+
+    <div class="card" id="draft-card" style="display:none;">
+      <div class="card-head"><h2>Your drafts</h2></div>
+      <table class="data-table">
+        <thead><tr><th>Request ID</th><th>Department</th><th>Vendor</th><th>Amount</th><th>Last saved</th><th></th></tr></thead>
+        <tbody id="draft-table-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ============ MY REQUESTS ============ -->
+  <div class="view" id="view-mine">
+    <div class="card">
+      <div class="toolbar-row">
+        <h2 style="margin:0;">My Requests</h2>
+        <div class="filters">
+          <select class="filter-select" id="mine-status-filter" onchange="renderMineTable()">
+            <option value="">All statuses</option>
+          </select>
+          <button type="button" class="btn btn-ghost" onclick="refreshAll()">Refresh</button>
+        </div>
+      </div>
+      <table class="data-table">
+        <thead><tr><th>Request ID</th><th>Department</th><th>Vendor</th><th>Amount</th><th>Due date</th><th>Status</th><th>Submitted</th></tr></thead>
+        <tbody id="mine-table-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ============ APPROVALS ============ -->
+  <div class="view" id="view-approvals">
+    <div class="card">
+      <div class="toolbar-row">
+        <h2 style="margin:0;">Pending My Approval</h2>
+        <button type="button" class="btn btn-ghost" onclick="refreshAll()">Refresh</button>
+      </div>
+      <table class="data-table">
+        <thead><tr><th>Request ID</th><th>Department</th><th>Requestor</th><th>Vendor</th><th>Amount</th><th>Due date</th><th>Submitted</th></tr></thead>
+        <tbody id="approvals-table-body"></tbody>
+      </table>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>My Past Decisions</h2></div>
+      <table class="data-table">
+        <thead><tr><th>Request ID</th><th>Department</th><th>Requestor</th><th>Vendor</th><th>Amount</th><th>Decision</th><th>Decided</th></tr></thead>
+        <tbody id="approvals-history-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ============ FINANCE QUEUE ============ -->
+  <div class="view" id="view-finance">
+    <div class="card">
+      <div class="toolbar-row">
+        <h2 style="margin:0;">Awaiting Finance Review</h2>
+        <div class="filters">
+          <select class="filter-select" id="finance-dept-filter" onchange="renderFinanceTable()">
+            <option value="">All departments</option>
+            <option value="Marketing">Marketing</option>
+            <option value="Operations">Operations</option>
+            <option value="HR">HR</option>
+          </select>
+          <button type="button" class="btn btn-ghost" onclick="refreshAll()">Refresh</button>
+        </div>
+      </div>
+      <table class="data-table">
+        <thead><tr><th>Request ID</th><th>Department</th><th>Requestor</th><th>Vendor</th><th>Amount</th><th>Due date</th><th>Approved by</th></tr></thead>
+        <tbody id="finance-table-body"></tbody>
+      </table>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>Finance History</h2></div>
+      <table class="data-table">
+        <thead><tr><th>Request ID</th><th>Department</th><th>Vendor</th><th>Amount</th><th>Outcome</th><th>Decided</th><th>Payment ref.</th></tr></thead>
+        <tbody id="finance-history-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ============ USER MANAGEMENT (admins only) ============ -->
+  <div class="view" id="view-admin">
+    <div class="card" id="admin-list-warning" style="display:none; border-left: 3px solid var(--warn); background: var(--warn-bg);">
+      <strong>The "AP System Roles" list wasn't found on this site.</strong>
+      <div class="field-hint" style="margin-top:6px;">Create a SharePoint list named exactly <code>AP System Roles</code> on the same site as your requests list, with columns: <code>RoleType</code> (Choice: "Department Approver", "Finance Team"), <code>Department</code> (Choice: Marketing/Operations/HR), <code>Email</code> (Single line of text). Then click Recheck below.</div>
+      <div class="btn-row" style="justify-content:flex-start; margin-top:10px;">
+        <button type="button" class="btn btn-ghost" onclick="recheckRolesList()">Recheck</button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <h2>Department Approvers</h2>
+          <div class="muted small">One approver per department. Saving replaces who new requests for that department are routed to.</div>
+        </div>
+      </div>
+      <div id="admin-dept-body"></div>
+    </div>
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <h2>Finance Team</h2>
+          <div class="muted small">Anyone listed here sees the Finance Queue tab and can process every department's approved requests.</div>
+        </div>
+      </div>
+      <table class="data-table">
+        <thead><tr><th>Email</th><th></th></tr></thead>
+        <tbody id="admin-finance-body"></tbody>
+      </table>
+      <div class="btn-row" style="justify-content:flex-start; margin-top:14px;">
+        <input class="text-field" id="admin-finance-new-email" placeholder="name@saxonrenewables.com" style="max-width:320px;">
+        <button type="button" class="btn btn-primary" onclick="addFinanceMember()">Add to Finance team</button>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div id="modal-overlay">
+  <div id="modal-card">
+    <div id="modal-head">
+      <h2 id="modal-title">Request detail</h2>
+      <button type="button" id="modal-close-btn" onclick="closeModal()">Close</button>
+    </div>
+    <div id="modal-body"></div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+/* =======================================================================
+   AZURE AD + SHAREPOINT CONFIG — fill these in before use.
+   =======================================================================
+   1. Register an app in Azure AD (Entra ID) as a Single-page application
+      (SPA), redirect URI = the URL this file will be hosted at (e.g. your
+      GitHub Pages URL). Grant it DELEGATED Graph permissions:
+        - Sites.ReadWrite.All
+        - User.Read
+      and have an admin grant consent.
+   2. Create a SharePoint list called "AP Requests" with the columns
+      documented in the project notes (Department, VendorName, Amount,
+      Status, etc.) — see the setup message you were given alongside this
+      file for the exact column list and types.
+   3. Fill in the values below. */
+const TENANT_ID = "ab7c8c1e-dc1d-431f-ba8b-e4de2b047f8b"; // Directory (tenant) ID — "Finance AP Request" app registration
+const CLIENT_ID = "15ab80ca-fab7-4755-9f9b-5275c47dec90"; // Application (client) ID — "Finance AP Request" app registration
+const SP_HOSTNAME = "saxonrenewables.sharepoint.com";    // your SharePoint tenant hostname
+const SP_SITE_PATH = "/sites/Operations";                // the site the list & document library live on
+const SP_LIST_NAME = "Finance AP Record";                // must match the SharePoint list's display name exactly
+const DOC_LIBRARY_ROOT = "AP Requests";                  // folder created inside the site's default "Documents" library
+const GRAPH_SCOPES = ["Sites.ReadWrite.All", "User.Read"];
+const SP_ROLES_LIST_NAME = "AP System Roles";            // second SharePoint list — holds department approvers + Finance team, editable from the User Management tab
+
+/* Fallback values, used only until the "AP System Roles" list has rows —
+   see loadRolesConfig(). Once that list has data, it's the source of
+   truth and these are ignored. Department keys here also define which
+   departments the whole app offers. */
+const DEPARTMENTS = {
+  "Marketing":  { approverEmail: "marketing.approver@saxonrenewables.com" },
+  "Operations": { approverEmail: "operations.approver@saxonrenewables.com" },
+  "HR":         { approverEmail: "hr.approver@saxonrenewables.com" }
+};
+const FINANCE_TEAM = [
+  "finance1@saxonrenewables.com",
+  "finance2@saxonrenewables.com"
+];
+
+/* Super Admin(s): anyone on this list can open the User Management tab —
+   view, edit, and add department approvers and Finance team members.
+   Keep this short — it's the one thing that still has to be hardcoded,
+   since something has to decide who is trusted to grant that access to
+   others. */
+const ADMIN_EMAILS = [
+  "shauyuan.tan@saxonrenewables.com"
+];
+
+/* ======================================================================= */
+
+const STATUS = {
+  DRAFT: 'Draft',
+  PENDING_APPROVAL: 'Pending Approval',
+  REJECTED_APPROVER: 'Rejected by Approver',
+  PENDING_FINANCE: 'Approved – Pending Finance',
+  PROCESSED: 'Processed',
+  REJECTED_FINANCE: 'Rejected by Finance'
+};
+const STATUS_CLASS = {
+  [STATUS.DRAFT]: 'status-draft',
+  [STATUS.PENDING_APPROVAL]: 'status-pending-approval',
+  [STATUS.REJECTED_APPROVER]: 'status-rejected-approver',
+  [STATUS.PENDING_FINANCE]: 'status-pending-finance',
+  [STATUS.PROCESSED]: 'status-processed',
+  [STATUS.REJECTED_FINANCE]: 'status-rejected-finance'
+};
+
+const DATA_FIELD_MAP = {
+  Title: 'title', RequestID: 'requestId', Department: 'department',
+  RequestorName: 'requestorName', RequestorEmail: 'requestorEmail',
+  VendorName: 'vendorName', InvoiceNumber: 'invoiceNumber',
+  InvoiceDate: 'invoiceDate', DueDate: 'dueDate', Amount: 'amount', Currency: 'currency',
+  PaymentTerms: 'paymentTerms', Description: 'description', DocumentLinks: 'documentLinks',
+  Status: 'status', ApproverEmail: 'approverEmail', ApprovalDecision: 'approvalDecision',
+  ApprovalDate: 'approvalDate', ApprovalComments: 'approvalComments',
+  FinanceReviewer: 'financeReviewer', FinanceDecision: 'financeDecision',
+  FinanceDecisionDate: 'financeDecisionDate', FinanceComments: 'financeComments',
+  PaymentReference: 'paymentReference', SubmittedDate: 'submittedDate', HistoryLog: 'historyLog'
+};
+
+let currentAccount = null;
+let siteId = null, listId = null;
+let columnMapCache = null;
+let allItemsCache = [];
+let currentView = 'new';
+let modalContext = null; // { record, mode }
+const newRequestFiles = []; // File objects staged for the New Request form
+
+/* Roles list (department approvers + Finance team), loaded from SharePoint
+   at sign-in via loadRolesConfig(). Falls back to the DEPARTMENTS /
+   FINANCE_TEAM constants above until that list has rows. */
+let rolesListId = null;
+let rolesColumnMapCache = null;
+let deptApproverMap = {};  // { "Marketing": { itemId, email }, ... }
+let financeMembers = [];   // [{ itemId, email }, ...]
+
+const msalInstance = new msal.PublicClientApplication({
+  auth: {
+    clientId: CLIENT_ID,
+    authority: "https://login.microsoftonline.com/" + TENANT_ID,
+    redirectUri: window.location.origin + window.location.pathname
+  },
+  cache: { cacheLocation: "sessionStorage" }
+});
+const msalReady = msalInstance.initialize();
+
+/* ---------------------------------------------------------------------
+   Role helpers
+   --------------------------------------------------------------------- */
+function myEmail(){ return currentAccount ? currentAccount.username.toLowerCase() : ''; }
+function approverDepartments(){
+  const email = myEmail();
+  return Object.keys(deptApproverMap).filter(d => (deptApproverMap[d].email || '').toLowerCase() === email);
+}
+function isFinanceUser(){
+  const email = myEmail();
+  return financeMembers.some(m => (m.email || '').toLowerCase() === email);
+}
+function isAdminUser(){
+  const email = myEmail();
+  return ADMIN_EMAILS.some(e => e.toLowerCase() === email);
+}
+
+/* ---------------------------------------------------------------------
+   Microsoft Graph plumbing
+   --------------------------------------------------------------------- */
+async function getAccessToken(scopes){
+  scopes = scopes || GRAPH_SCOPES;
+  try {
+    const result = await msalInstance.acquireTokenSilent({ scopes, account: currentAccount });
+    return result.accessToken;
+  } catch (e) {
+    const result = await msalInstance.acquireTokenPopup({ scopes });
+    return result.accessToken;
+  }
+}
+async function graphFetch(path, options){
+  options = options || {};
+  const token = await getAccessToken(options.scopes);
+  const headers = Object.assign({ 'Authorization': 'Bearer ' + token }, options.headers || {});
+  if (!(options.body instanceof ArrayBuffer) && !(options.body instanceof Blob)) {
+    headers['Content-Type'] = headers['Content-Type'] || 'application/json';
+  }
+  const url = path.startsWith('http') ? path : 'https://graph.microsoft.com/v1.0' + path;
+  const res = await fetch(url, { method: options.method || 'GET', body: options.body, headers });
+  if (res.ok) {
+    if (res.status === 204) return null;
+    const text = await res.text();
+    return text ? JSON.parse(text) : null;
+  }
+  const text = await res.text().catch(() => '');
+  const err = new Error('Graph ' + res.status + ': ' + text.slice(0, 400));
+  err.status = res.status;
+  throw err;
+}
+async function resolveSiteAndList(){
+  const site = await graphFetch('/sites/' + SP_HOSTNAME + ':' + SP_SITE_PATH);
+  siteId = site.id;
+  const lists = await graphFetch("/sites/" + siteId + "/lists?$filter=displayName eq '" + encodeURIComponent(SP_LIST_NAME) + "'");
+  if (!lists.value.length) throw new Error('SharePoint list "' + SP_LIST_NAME + '" was not found on ' + SP_SITE_PATH + '.');
+  listId = lists.value[0].id;
+}
+async function getColumnMap(){
+  if (columnMapCache) return columnMapCache;
+  const data = await graphFetch("/sites/" + siteId + "/lists/" + listId + "/columns?$select=name,displayName,hidden,readOnly");
+  const map = {};
+  (data.value || []).forEach(col => { if (!col.readOnly) map[col.displayName] = col.name; });
+  columnMapCache = map;
+  return map;
+}
+
+/* ---- Roles list ("AP System Roles") — department approvers + Finance team ----
+   Tolerates the list not existing yet: rolesListId stays null and
+   loadRolesConfig() falls back to the DEPARTMENTS / FINANCE_TEAM
+   constants, so the app still works before an admin creates this list. */
+async function resolveRolesList(){
+  try {
+    const lists = await graphFetch("/sites/" + siteId + "/lists?$filter=displayName eq '" + encodeURIComponent(SP_ROLES_LIST_NAME) + "'");
+    rolesListId = lists.value.length ? lists.value[0].id : null;
+  } catch (e) { rolesListId = null; }
+}
+async function getRolesColumnMap(){
+  if (rolesColumnMapCache) return rolesColumnMapCache;
+  const data = await graphFetch("/sites/" + siteId + "/lists/" + rolesListId + "/columns?$select=name,displayName,hidden,readOnly");
+  const map = {};
+  (data.value || []).forEach(col => { if (!col.readOnly) map[col.displayName] = col.name; });
+  rolesColumnMapCache = map;
+  return map;
+}
+async function loadRolesConfig(){
+  deptApproverMap = {};
+  financeMembers = [];
+  if (!rolesListId) {
+    Object.keys(DEPARTMENTS).forEach(d => { deptApproverMap[d] = { itemId: null, email: DEPARTMENTS[d].approverEmail || '' }; });
+    financeMembers = FINANCE_TEAM.map(e => ({ itemId: null, email: e }));
+    return;
+  }
+  const colMap = await getRolesColumnMap();
+  const data = await graphFetch(
+    "/sites/" + siteId + "/lists/" + rolesListId + "/items?expand=fields&$top=999",
+    { headers: { 'Prefer': 'HonorNonIndexedQueriesWarningMayFailRandomly' } }
+  );
+  (data.value || []).forEach(item => {
+    const f = item.fields;
+    const roleType = colMap.RoleType ? f[colMap.RoleType] : '';
+    const email = (colMap.Email ? f[colMap.Email] : '') || '';
+    const department = colMap.Department ? f[colMap.Department] : '';
+    if (roleType === 'Department Approver' && department) {
+      deptApproverMap[department] = { itemId: item.id, email };
+    } else if (roleType === 'Finance Team' && email) {
+      financeMembers.push({ itemId: item.id, email });
+    }
+  });
+  // Departments with no row yet on the list fall back to the hardcoded default.
+  Object.keys(DEPARTMENTS).forEach(d => {
+    if (!deptApproverMap[d]) deptApproverMap[d] = { itemId: null, email: DEPARTMENTS[d].approverEmail || '' };
+  });
+}
+async function saveDeptApprover(department){
+  const btn = document.getElementById('admin-approver-btn-' + department);
+  const input = document.getElementById('admin-approver-' + department);
+  const email = input.value.trim();
+  if (!email) { showToast('Enter an email address for ' + department + '.', 'error'); return; }
+  if (!rolesListId) { showToast('The "' + SP_ROLES_LIST_NAME + '" list was not found on this site — create it first, then click Recheck.', 'error'); return; }
+  setBusy(btn, true, 'Saving…');
+  try {
+    const colMap = await getRolesColumnMap();
+    const fieldsBody = {};
+    if (colMap.RoleType) fieldsBody[colMap.RoleType] = 'Department Approver';
+    if (colMap.Department) fieldsBody[colMap.Department] = department;
+    if (colMap.Email) fieldsBody[colMap.Email] = email;
+    fieldsBody['Title'] = department + ' Approver';
+    const existing = deptApproverMap[department];
+    if (existing && existing.itemId) {
+      await graphFetch("/sites/" + siteId + "/lists/" + rolesListId + "/items/" + existing.itemId + "/fields", { method: 'PATCH', body: JSON.stringify(fieldsBody) });
+    } else {
+      await graphFetch("/sites/" + siteId + "/lists/" + rolesListId + "/items", { method: 'POST', body: JSON.stringify({ fields: fieldsBody }) });
+    }
+    showToast(department + ' approver updated.', 'success');
+    await loadRolesConfig();
+    renderAdminTab();
+    setupRoleUI();
+  } catch (e) { showToast('Could not save: ' + e.message, 'error'); }
+  setBusy(btn, false);
+}
+async function addFinanceMember(){
+  const input = document.getElementById('admin-finance-new-email');
+  const email = input.value.trim();
+  if (!email) { showToast('Enter an email address.', 'error'); return; }
+  if (financeMembers.some(m => m.email.toLowerCase() === email.toLowerCase())) { showToast('That email is already on the Finance team.', 'error'); return; }
+  if (!rolesListId) { showToast('The "' + SP_ROLES_LIST_NAME + '" list was not found on this site — create it first, then click Recheck.', 'error'); return; }
+  try {
+    const colMap = await getRolesColumnMap();
+    const fieldsBody = {};
+    if (colMap.RoleType) fieldsBody[colMap.RoleType] = 'Finance Team';
+    if (colMap.Email) fieldsBody[colMap.Email] = email;
+    fieldsBody['Title'] = 'Finance — ' + email;
+    await graphFetch("/sites/" + siteId + "/lists/" + rolesListId + "/items", { method: 'POST', body: JSON.stringify({ fields: fieldsBody }) });
+    input.value = '';
+    showToast('Added to Finance team.', 'success');
+    await loadRolesConfig();
+    renderAdminTab();
+    setupRoleUI();
+  } catch (e) { showToast('Could not add: ' + e.message, 'error'); }
+}
+async function removeFinanceMember(itemId){
+  if (!confirm('Remove this person from the Finance team?')) return;
+  try {
+    await graphFetch("/sites/" + siteId + "/lists/" + rolesListId + "/items/" + itemId, { method: 'DELETE' });
+    showToast('Removed from Finance team.', 'success');
+    await loadRolesConfig();
+    renderAdminTab();
+    setupRoleUI();
+  } catch (e) { showToast('Could not remove: ' + e.message, 'error'); }
+}
+async function recheckRolesList(){
+  await resolveRolesList();
+  await loadRolesConfig();
+  renderAdminTab();
+  setupRoleUI();
+  showToast(rolesListId ? 'Found the "' + SP_ROLES_LIST_NAME + '" list.' : 'Still could not find the "' + SP_ROLES_LIST_NAME + '" list.', rolesListId ? 'success' : 'error');
+}
+function renderAdminTab(){
+  const warnEl = document.getElementById('admin-list-warning');
+  if (warnEl) warnEl.style.display = rolesListId ? 'none' : 'block';
+  const deptEl = document.getElementById('admin-dept-body');
+  if (deptEl) {
+    deptEl.innerHTML = Object.keys(DEPARTMENTS).map(d => {
+      const current = (deptApproverMap[d] || {}).email || '';
+      return '<div class="field-row" style="display:flex; gap:8px; align-items:flex-end; margin-bottom:12px;">' +
+        '<div style="flex:1;"><label class="field-label">' + escapeHtml(d) + ' approver</label>' +
+        '<input class="text-field" id="admin-approver-' + d + '" value="' + escapeHtml(current) + '" placeholder="name@saxonrenewables.com"></div>' +
+        '<button type="button" class="btn btn-primary" id="admin-approver-btn-' + d + '" onclick="saveDeptApprover(\'' + d + '\')">Save</button>' +
+      '</div>';
+    }).join('');
+  }
+  const financeEl = document.getElementById('admin-finance-body');
+  if (financeEl) {
+    financeEl.innerHTML = financeMembers.length ? financeMembers.map(m =>
+      '<tr><td>' + escapeHtml(m.email) + '</td><td>' + (m.itemId ? '<button type="button" class="btn btn-ghost" onclick="removeFinanceMember(\'' + m.itemId + '\')">Remove</button>' : '<span class="muted small">default — add the list to edit</span>') + '</td></tr>'
+    ).join('') : '<tr class="empty-row"><td colspan="2">No Finance team members configured yet.</td></tr>';
+  }
+}
+
+/* ---- record <-> SharePoint fields conversion ---- */
+function recordToFields(record, colMap){
+  const fields = {};
+  Object.keys(DATA_FIELD_MAP).forEach(display => {
+    const key = DATA_FIELD_MAP[display];
+    const internal = colMap[display];
+    if (!internal) return; // column missing on the list — skip silently
+    if (record[key] === undefined) return;
+    fields[internal] = record[key];
+  });
+  return fields;
+}
+function itemToRecord(item, colMap){
+  const rec = { id: item.id };
+  Object.keys(DATA_FIELD_MAP).forEach(display => {
+    const key = DATA_FIELD_MAP[display];
+    const internal = colMap[display];
+    rec[key] = internal ? (item.fields[internal] ?? '') : '';
+  });
+  return rec;
+}
+
+/* ---- Folder creation + file upload ---- */
+async function ensureFolderPath(fullPath){
+  const segments = fullPath.split('/').filter(Boolean);
+  let built = '';
+  for (const seg of segments) {
+    const parentEncoded = built ? encodeURIComponent(built).replace(/%2F/g, '/') : '';
+    try {
+      await graphFetch(
+        "/sites/" + siteId + "/drive/root:/" + (parentEncoded ? parentEncoded + '/' : '') + ":/children",
+        { method: 'POST', body: JSON.stringify({ name: seg, folder: {}, "@microsoft.graph.conflictBehavior": "fail" }) }
+      );
+    } catch (e) {
+      // 409/400 usually means it already exists — that's fine, continue
+    }
+    built = built ? built + '/' + seg : seg;
+  }
+}
+async function uploadOneFile(folderPath, file){
+  const safeName = file.name.replace(/[#%*:<>?/\\{|}]/g, '_');
+  const encodedPath = encodeURIComponent(folderPath + '/' + safeName).replace(/%2F/g, '/');
+  const buf = await file.arrayBuffer();
+  const item = await graphFetch(
+    "/sites/" + siteId + "/drive/root:/" + encodedPath + ":/content?@microsoft.graph.conflictBehavior=replace",
+    { method: 'PUT', body: buf, headers: { 'Content-Type': file.type || 'application/octet-stream' } }
+  );
+  return { name: file.name, url: item.webUrl };
+}
+async function uploadFilesForRequest(department, requestId, files){
+  if (!files.length) return [];
+  const folderPath = DOC_LIBRARY_ROOT + '/' + department + '/' + requestId;
+  await ensureFolderPath(folderPath);
+  const uploaded = [];
+  for (const f of files) uploaded.push(await uploadOneFile(folderPath, f));
+  return uploaded;
+}
+
+/* ---- List item CRUD ---- */
+async function createRequestItem(record){
+  const colMap = await getColumnMap();
+  const fields = recordToFields(record, colMap);
+  const item = await graphFetch("/sites/" + siteId + "/lists/" + listId + "/items", {
+    method: 'POST', body: JSON.stringify({ fields })
+  });
+  return item;
+}
+async function updateRequestItem(itemId, patch){
+  const colMap = await getColumnMap();
+  const fields = recordToFields(patch, colMap);
+  await graphFetch("/sites/" + siteId + "/lists/" + listId + "/items/" + itemId + "/fields", {
+    method: 'PATCH', body: JSON.stringify(fields)
+  });
+}
+async function fetchAllItems(){
+  const colMap = await getColumnMap();
+  const data = await graphFetch(
+    "/sites/" + siteId + "/lists/" + listId + "/items?expand=fields&$top=999",
+    { headers: { 'Prefer': 'HonorNonIndexedQueriesWarningMayFailRandomly' } }
+  );
+  return (data.value || []).map(item => itemToRecord(item, colMap));
+}
+
+/* ---------------------------------------------------------------------
+   Utility helpers
+   --------------------------------------------------------------------- */
+function genRequestId(){
+  const d = new Date();
+  const ymd = d.getFullYear().toString() + String(d.getMonth() + 1).padStart(2, '0') + String(d.getDate()).padStart(2, '0');
+  const rand = Math.random().toString(36).slice(2, 6);
+  return 'AP-' + ymd + '-' + rand;
+}
+function nowIso(){ return new Date().toISOString(); }
+function fmtDate(v){
+  if (!v) return '—';
+  const d = new Date(v);
+  if (isNaN(d)) return v;
+  return d.toLocaleDateString('en-SG', { year: 'numeric', month: 'short', day: 'numeric' });
+}
+function fmtDateTime(v){
+  if (!v) return '—';
+  const d = new Date(v);
+  if (isNaN(d)) return v;
+  return d.toLocaleString('en-SG', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+function fmtAmount(amount, currency){
+  const n = Number(amount || 0);
+  return (currency || '') + ' ' + n.toLocaleString('en-SG', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function statusPill(status){
+  const cls = STATUS_CLASS[status] || 'status-draft';
+  return '<span class="status-pill ' + cls + '">' + escapeHtml(status || STATUS.DRAFT) + '</span>';
+}
+function escapeHtml(s){
+  return String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+}
+function parseDocLinks(json){
+  try { const arr = JSON.parse(json || '[]'); return Array.isArray(arr) ? arr : []; } catch (e) { return []; }
+}
+function appendHistory(existingLog, line){
+  const stamp = new Date().toLocaleString('en-SG');
+  const entry = '[' + stamp + '] ' + line;
+  return existingLog ? (existingLog + '\n' + entry) : entry;
+}
+function showToast(message, kind){
+  const el = document.getElementById('toast');
+  el.textContent = message;
+  el.className = kind || '';
+  el.style.display = 'block';
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(() => { el.style.display = 'none'; }, 4200);
+}
+function setBusy(btn, busy, busyLabel){
+  if (!btn) return;
+  if (busy) { btn.dataset.origLabel = btn.textContent; btn.textContent = busyLabel || 'Working…'; btn.disabled = true; }
+  else { btn.textContent = btn.dataset.origLabel || btn.textContent; btn.disabled = false; }
+}
+
+/* ---------------------------------------------------------------------
+   New Request form
+   --------------------------------------------------------------------- */
+document.getElementById('f-files').addEventListener('change', (e) => {
+  for (const f of e.target.files) newRequestFiles.push(f);
+  e.target.value = '';
+  renderNewFileChips();
+});
+function renderNewFileChips(){
+  const list = document.getElementById('new-file-chip-list');
+  list.innerHTML = newRequestFiles.map((f, i) =>
+    '<div class="file-chip"><span>' + escapeHtml(f.name) + '</span><span class="rm" onclick="removeNewFile(' + i + ')">Remove</span></div>'
+  ).join('');
+}
+function removeNewFile(i){ newRequestFiles.splice(i, 1); renderNewFileChips(); }
+function clearNewRequestForm(){
+  ['f-department','f-vendor','f-invoice-number','f-payment-terms','f-invoice-date','f-due-date','f-amount','f-description'].forEach(id => {
+    document.getElementById(id).value = '';
+  });
+  document.getElementById('f-currency').value = 'SGD';
+  newRequestFiles.length = 0;
+  renderNewFileChips();
+}
+function readNewRequestForm(){
+  return {
+    department: document.getElementById('f-department').value,
+    vendorName: document.getElementById('f-vendor').value.trim(),
+    invoiceNumber: document.getElementById('f-invoice-number').value.trim(),
+    paymentTerms: document.getElementById('f-payment-terms').value.trim(),
+    invoiceDate: document.getElementById('f-invoice-date').value ? new Date(document.getElementById('f-invoice-date').value).toISOString() : '',
+    dueDate: document.getElementById('f-due-date').value ? new Date(document.getElementById('f-due-date').value).toISOString() : '',
+    amount: parseFloat(document.getElementById('f-amount').value || '0'),
+    currency: document.getElementById('f-currency').value,
+    description: document.getElementById('f-description').value.trim()
+  };
+}
+function validateNewRequestForm(form){
+  if (!form.department) return 'Please choose a requesting department.';
+  if (!form.vendorName) return 'Please enter the vendor name.';
+  if (!form.dueDate) return 'Please enter a due date.';
+  if (!form.amount || form.amount <= 0) return 'Please enter an amount greater than zero.';
+  if (!form.description) return 'Please describe the purpose of this request.';
+  return null;
+}
+async function handleSaveDraft(){
+  const btn = document.getElementById('btn-save-draft');
+  const form = readNewRequestForm();
+  if (!form.department) { showToast('Please choose a department before saving.', 'error'); return; }
+  setBusy(btn, true, 'Saving…');
+  try {
+    const requestId = genRequestId();
+    const docs = await uploadFilesForRequest(form.department, requestId, newRequestFiles);
+    const record = Object.assign({}, form, {
+      title: form.vendorName, requestId,
+      requestorName: currentAccount.name || currentAccount.username,
+      requestorEmail: currentAccount.username,
+      documentLinks: JSON.stringify(docs),
+      status: STATUS.DRAFT,
+      approverEmail: (deptApproverMap[form.department] || {}).email || '',
+      submittedDate: '',
+      historyLog: appendHistory('', currentAccount.username + ' saved as draft.')
+    });
+    await createRequestItem(record);
+    showToast('Draft saved.', 'success');
+    clearNewRequestForm();
+    await refreshAll();
+  } catch (e) { showToast('Could not save draft: ' + e.message, 'error'); }
+  setBusy(btn, false);
+}
+async function handleSubmitRequest(){
+  const btn = document.getElementById('btn-submit-request');
+  const form = readNewRequestForm();
+  const err = validateNewRequestForm(form);
+  if (err) { showToast(err, 'error'); return; }
+  setBusy(btn, true, 'Submitting…');
+  try {
+    const requestId = genRequestId();
+    const docs = await uploadFilesForRequest(form.department, requestId, newRequestFiles);
+    const record = Object.assign({}, form, {
+      title: form.vendorName, requestId,
+      requestorName: currentAccount.name || currentAccount.username,
+      requestorEmail: currentAccount.username,
+      documentLinks: JSON.stringify(docs),
+      status: STATUS.PENDING_APPROVAL,
+      approverEmail: (deptApproverMap[form.department] || {}).email || '',
+      submittedDate: nowIso(),
+      historyLog: appendHistory('', currentAccount.username + ' submitted for approval (' + form.department + ').')
+    });
+    await createRequestItem(record);
+    showToast('Request ' + requestId + ' submitted for approval.', 'success');
+    clearNewRequestForm();
+    await refreshAll();
+    switchTab('mine');
+  } catch (e) { showToast('Could not submit request: ' + e.message, 'error'); }
+  setBusy(btn, false);
+}
+
+/* ---------------------------------------------------------------------
+   Tabs / views
+   --------------------------------------------------------------------- */
+function switchTab(view){
+  currentView = view;
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.view === view));
+  document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === 'view-' + view));
+}
+function setupRoleUI(){
+  const badgesEl = document.getElementById('role-badges');
+  const badges = ['Requester'];
+  const depts = approverDepartments();
+  depts.forEach(d => badges.push('Approver · ' + d));
+  if (isFinanceUser()) badges.push('Finance');
+  if (isAdminUser()) badges.push('Super Admin');
+  badgesEl.innerHTML = badges.map(b => '<span class="role-badge">' + escapeHtml(b) + '</span>').join('');
+  document.getElementById('tab-approvals').style.display = depts.length ? '' : 'none';
+  document.getElementById('tab-finance').style.display = isFinanceUser() ? '' : 'none';
+  document.getElementById('tab-admin').style.display = isAdminUser() ? '' : 'none';
+}
+
+/* ---- My Requests ---- */
+function renderMineTable(){
+  const email = myEmail();
+  const mine = allItemsCache.filter(r => (r.requestorEmail || '').toLowerCase() === email);
+  const filterSel = document.getElementById('mine-status-filter');
+  if (filterSel.options.length <= 1) {
+    Object.values(STATUS).forEach(s => {
+      const opt = document.createElement('option'); opt.value = s; opt.textContent = s; filterSel.appendChild(opt);
+    });
+  }
+  const filterVal = filterSel.value;
+  const rows = mine.filter(r => !filterVal || r.status === filterVal)
+    .sort((a, b) => (b.submittedDate || '').localeCompare(a.submittedDate || ''));
+  document.getElementById('count-mine').textContent = mine.filter(r => r.status !== STATUS.DRAFT).length;
+  document.getElementById('count-mine').classList.toggle('zero', mine.length === 0);
+  const body = document.getElementById('mine-table-body');
+  body.innerHTML = rows.length ? rows.map(r =>
+    '<tr onclick="openDetail(\'' + r.id + '\',\'mine\')"><td>' + escapeHtml(r.requestId) + '</td><td>' + escapeHtml(r.department) +
+    '</td><td>' + escapeHtml(r.vendorName) + '</td><td>' + fmtAmount(r.amount, r.currency) + '</td><td>' + fmtDate(r.dueDate) +
+    '</td><td>' + statusPill(r.status) + '</td><td>' + (r.status === STATUS.DRAFT ? '<span class="muted">draft</span>' : fmtDateTime(r.submittedDate)) + '</td></tr>'
+  ).join('') : '<tr class="empty-row"><td colspan="7">No requests yet.</td></tr>';
+
+  const drafts = mine.filter(r => r.status === STATUS.DRAFT);
+  document.getElementById('draft-card').style.display = drafts.length ? '' : 'none';
+  document.getElementById('draft-table-body').innerHTML = drafts.map(r =>
+    '<tr onclick="openDetail(\'' + r.id + '\',\'edit-draft\')"><td>' + escapeHtml(r.requestId) + '</td><td>' + escapeHtml(r.department) +
+    '</td><td>' + escapeHtml(r.vendorName) + '</td><td>' + fmtAmount(r.amount, r.currency) + '</td><td>' + fmtDateTime(r.submittedDate || '') +
+    '</td><td><button type="button" class="btn btn-ghost" onclick="event.stopPropagation(); openDetail(\'' + r.id + '\',\'edit-draft\')">Open</button></td></tr>'
+  ).join('');
+}
+
+/* ---- Approvals ---- */
+function renderApprovalsTable(){
+  const depts = approverDepartments();
+  const email = myEmail();
+  const pending = allItemsCache.filter(r => depts.includes(r.department) && r.status === STATUS.PENDING_APPROVAL)
+    .sort((a, b) => (a.submittedDate || '').localeCompare(b.submittedDate || ''));
+  const decided = allItemsCache.filter(r => (r.approverEmail || '').toLowerCase() === email && r.approvalDate)
+    .sort((a, b) => (b.approvalDate || '').localeCompare(a.approvalDate || ''));
+  document.getElementById('count-approvals').textContent = pending.length;
+  document.getElementById('count-approvals').classList.toggle('zero', pending.length === 0);
+  document.getElementById('approvals-table-body').innerHTML = pending.length ? pending.map(r =>
+    '<tr onclick="openDetail(\'' + r.id + '\',\'approve\')"><td>' + escapeHtml(r.requestId) + '</td><td>' + escapeHtml(r.department) +
+    '</td><td>' + escapeHtml(r.requestorName) + '</td><td>' + escapeHtml(r.vendorName) + '</td><td>' + fmtAmount(r.amount, r.currency) +
+    '</td><td>' + fmtDate(r.dueDate) + '</td><td>' + fmtDateTime(r.submittedDate) + '</td></tr>'
+  ).join('') : '<tr class="empty-row"><td colspan="7">Nothing waiting on your approval.</td></tr>';
+  document.getElementById('approvals-history-body').innerHTML = decided.length ? decided.slice(0, 50).map(r =>
+    '<tr onclick="openDetail(\'' + r.id + '\',\'mine\')"><td>' + escapeHtml(r.requestId) + '</td><td>' + escapeHtml(r.department) +
+    '</td><td>' + escapeHtml(r.requestorName) + '</td><td>' + escapeHtml(r.vendorName) + '</td><td>' + fmtAmount(r.amount, r.currency) +
+    '</td><td>' + statusPill(r.approvalDecision === 'Rejected' ? STATUS.REJECTED_APPROVER : STATUS.PENDING_FINANCE) + '</td><td>' + fmtDateTime(r.approvalDate) + '</td></tr>'
+  ).join('') : '<tr class="empty-row"><td colspan="7">No decisions yet.</td></tr>';
+}
+
+/* ---- Finance ---- */
+function renderFinanceTable(){
+  const deptFilter = document.getElementById('finance-dept-filter').value;
+  const pending = allItemsCache.filter(r => r.status === STATUS.PENDING_FINANCE && (!deptFilter || r.department === deptFilter))
+    .sort((a, b) => (a.approvalDate || '').localeCompare(b.approvalDate || ''));
+  const history = allItemsCache.filter(r => (r.status === STATUS.PROCESSED || r.status === STATUS.REJECTED_FINANCE) && (!deptFilter || r.department === deptFilter))
+    .sort((a, b) => (b.financeDecisionDate || '').localeCompare(a.financeDecisionDate || ''));
+  document.getElementById('count-finance').textContent = pending.length;
+  document.getElementById('count-finance').classList.toggle('zero', pending.length === 0);
+  document.getElementById('finance-table-body').innerHTML = pending.length ? pending.map(r =>
+    '<tr onclick="openDetail(\'' + r.id + '\',\'finance\')"><td>' + escapeHtml(r.requestId) + '</td><td>' + escapeHtml(r.department) +
+    '</td><td>' + escapeHtml(r.requestorName) + '</td><td>' + escapeHtml(r.vendorName) + '</td><td>' + fmtAmount(r.amount, r.currency) +
+    '</td><td>' + fmtDate(r.dueDate) + '</td><td>' + escapeHtml(r.approverEmail) + '</td></tr>'
+  ).join('') : '<tr class="empty-row"><td colspan="7">No requests awaiting Finance review.</td></tr>';
+  document.getElementById('finance-history-body').innerHTML = history.length ? history.slice(0, 100).map(r =>
+    '<tr onclick="openDetail(\'' + r.id + '\',\'mine\')"><td>' + escapeHtml(r.requestId) + '</td><td>' + escapeHtml(r.department) +
+    '</td><td>' + escapeHtml(r.vendorName) + '</td><td>' + fmtAmount(r.amount, r.currency) + '</td><td>' + statusPill(r.status) +
+    '</td><td>' + fmtDateTime(r.financeDecisionDate) + '</td><td>' + escapeHtml(r.paymentReference || '—') + '</td></tr>'
+  ).join('') : '<tr class="empty-row"><td colspan="7">No history yet.</td></tr>';
+}
+
+async function refreshAll(){
+  document.getElementById('app-loading').style.display = 'block';
+  try {
+    allItemsCache = await fetchAllItems();
+    renderMineTable(); renderApprovalsTable(); renderFinanceTable();
+  } catch (e) { showToast('Could not load requests: ' + e.message, 'error'); }
+  document.getElementById('app-loading').style.display = 'none';
+}
+
+/* ---------------------------------------------------------------------
+   Detail modal
+   --------------------------------------------------------------------- */
+function findRecord(id){ return allItemsCache.find(r => r.id === id); }
+function openDetail(id, mode){
+  const record = findRecord(id);
+  if (!record) return;
+  modalContext = { record, mode };
+  document.getElementById('modal-title').textContent = record.requestId + ' — ' + record.vendorName;
+  document.getElementById('modal-body').innerHTML = renderModalBody(record, mode);
+  document.getElementById('modal-overlay').style.display = 'flex';
+}
+function closeModal(){ document.getElementById('modal-overlay').style.display = 'none'; modalContext = null; }
+
+function docLinksHtml(record){
+  const docs = parseDocLinks(record.documentLinks);
+  if (!docs.length) return '<span class="muted">No documents attached.</span>';
+  return '<div class="doc-link-list">' + docs.map(d => '<a href="' + d.url + '" target="_blank" rel="noopener">' + escapeHtml(d.name) + '</a>').join('') + '</div>';
+}
+function baseDetailGrid(record){
+  return '' +
+    '<div class="detail-grid">' +
+      '<div><div class="k">Department</div>' + escapeHtml(record.department) + '</div>' +
+      '<div><div class="k">Status</div>' + statusPill(record.status) + '</div>' +
+      '<div><div class="k">Requestor</div>' + escapeHtml(record.requestorName) + ' &lt;' + escapeHtml(record.requestorEmail) + '&gt;</div>' +
+      '<div><div class="k">Submitted</div>' + fmtDateTime(record.submittedDate) + '</div>' +
+      '<div><div class="k">Vendor</div>' + escapeHtml(record.vendorName) + '</div>' +
+      '<div><div class="k">Invoice number</div>' + escapeHtml(record.invoiceNumber || '—') + '</div>' +
+      '<div><div class="k">Invoice date</div>' + fmtDate(record.invoiceDate) + '</div>' +
+      '<div><div class="k">Due date</div>' + fmtDate(record.dueDate) + '</div>' +
+      '<div><div class="k">Amount</div>' + fmtAmount(record.amount, record.currency) + '</div>' +
+      '<div><div class="k">Payment terms</div>' + escapeHtml(record.paymentTerms || '—') + '</div>' +
+      '<div class="full"><div class="k">Description</div>' + escapeHtml(record.description) + '</div>' +
+      '<div class="full"><div class="k">Documents</div>' + docLinksHtml(record) + '</div>' +
+    '</div>';
+}
+function approvalFinanceSummary(record){
+  let html = '';
+  if (record.approvalDate) {
+    html += '<hr class="section-divider"><div class="detail-grid">' +
+      '<div><div class="k">Department decision</div>' + escapeHtml(record.approvalDecision || '—') + ' by ' + escapeHtml(record.approverEmail) + '</div>' +
+      '<div><div class="k">Decided</div>' + fmtDateTime(record.approvalDate) + '</div>' +
+      '<div class="full"><div class="k">Approver comments</div>' + escapeHtml(record.approvalComments || '—') + '</div>' +
+    '</div>';
+  }
+  if (record.financeDecisionDate) {
+    html += '<hr class="section-divider"><div class="detail-grid">' +
+      '<div><div class="k">Finance decision</div>' + escapeHtml(record.financeDecision || '—') + ' by ' + escapeHtml(record.financeReviewer) + '</div>' +
+      '<div><div class="k">Decided</div>' + fmtDateTime(record.financeDecisionDate) + '</div>' +
+      '<div><div class="k">Payment reference</div>' + escapeHtml(record.paymentReference || '—') + '</div>' +
+      '<div class="full"><div class="k">Finance comments</div>' + escapeHtml(record.financeComments || '—') + '</div>' +
+    '</div>';
+  }
+  return html;
+}
+function historyHtml(record){
+  return '<hr class="section-divider"><div class="k" style="margin-bottom:6px;">History</div><div class="history-log">' + escapeHtml(record.historyLog || '—') + '</div>';
+}
+
+function renderModalBody(record, mode){
+  let html = baseDetailGrid(record) + approvalFinanceSummary(record) + historyHtml(record);
+
+  if (mode === 'edit-draft') {
+    html += '<hr class="section-divider"><div class="btn-row">' +
+      '<button type="button" class="btn btn-danger" onclick="deleteDraft(\'' + record.id + '\')">Delete draft</button>' +
+      '<button type="button" class="btn btn-primary" onclick="handleSubmitDraft(\'' + record.id + '\')">Submit for approval</button></div>' +
+      '<div class="field-hint" style="margin-top:6px;">To change details before submitting, delete this draft and re-enter it on the New Request tab.</div>';
+  }
+  if (mode === 'approve') {
+    html += '<hr class="section-divider">' +
+      '<div class="field-row"><label class="field-label">Comments (required if rejecting)</label>' +
+      '<textarea class="text-field" id="decision-comment"></textarea></div>' +
+      '<div class="btn-row">' +
+        '<button type="button" class="btn btn-danger" onclick="handleApprovalDecision(\'reject\')">Reject</button>' +
+        '<button type="button" class="btn btn-primary" onclick="handleApprovalDecision(\'approve\')">Approve → send to Finance</button>' +
+      '</div>';
+  }
+  if (mode === 'finance') {
+    html += '<hr class="section-divider">' +
+      '<div class="field-row"><label class="field-label">Payment reference</label>' +
+      '<input class="text-field" id="payment-ref" placeholder="e.g. bank transaction ID"></div>' +
+      '<div class="field-row"><label class="field-label">Comments (required if rejecting)</label>' +
+      '<textarea class="text-field" id="decision-comment"></textarea></div>' +
+      '<div class="btn-row">' +
+        '<button type="button" class="btn btn-danger" onclick="handleFinanceDecision(\'reject\')">Reject</button>' +
+        '<button type="button" class="btn btn-gold" onclick="handleFinanceDecision(\'process\')">Mark as processed / paid</button>' +
+      '</div>';
+  }
+  if (mode === 'mine' && record.status === STATUS.REJECTED_APPROVER && record.requestorEmail.toLowerCase() === myEmail()) {
+    html += '<hr class="section-divider"><div class="field-hint">This request was rejected by your department approver. Submit a new request if you would like to resend it, using the approver comments above to make corrections.</div>';
+  }
+  return html;
+}
+
+async function handleSubmitDraft(itemId){
+  const record = findRecord(itemId);
+  if (!record) return;
+  if (!record.dueDate || !record.amount || !record.description) {
+    showToast('This draft is missing required fields (due date, amount or description) — delete it and re-enter it on the New Request tab.', 'error');
+    return;
+  }
+  try {
+    const patch = {
+      status: STATUS.PENDING_APPROVAL,
+      approverEmail: (deptApproverMap[record.department] || {}).email || '',
+      submittedDate: nowIso(),
+      historyLog: appendHistory(record.historyLog, currentAccount.username + ' submitted this draft for approval (' + record.department + ').')
+    };
+    await updateRequestItem(itemId, patch);
+    showToast('Request ' + record.requestId + ' submitted for approval.', 'success');
+    closeModal();
+    await refreshAll();
+    switchTab('mine');
+  } catch (e) { showToast('Could not submit draft: ' + e.message, 'error'); }
+}
+async function deleteDraft(itemId){
+  if (!confirm('Delete this draft? This cannot be undone.')) return;
+  try {
+    await graphFetch("/sites/" + siteId + "/lists/" + listId + "/items/" + itemId, { method: 'DELETE' });
+    showToast('Draft deleted.', 'success');
+    closeModal();
+    await refreshAll();
+  } catch (e) { showToast('Could not delete draft: ' + e.message, 'error'); }
+}
+
+async function handleApprovalDecision(decision){
+  const record = modalContext.record;
+  const comment = (document.getElementById('decision-comment').value || '').trim();
+  if (decision === 'reject' && !comment) { showToast('Please add a comment explaining the rejection.', 'error'); return; }
+  try {
+    const patch = {
+      approverEmail: currentAccount.username,
+      approvalDecision: decision === 'approve' ? 'Approved' : 'Rejected',
+      approvalDate: nowIso(),
+      approvalComments: comment,
+      status: decision === 'approve' ? STATUS.PENDING_FINANCE : STATUS.REJECTED_APPROVER,
+      historyLog: appendHistory(record.historyLog, currentAccount.username + ' ' + (decision === 'approve' ? 'approved' : 'rejected') + ' the request.' + (comment ? ' Comment: ' + comment : ''))
+    };
+    await updateRequestItem(record.id, patch);
+    showToast('Decision recorded.', 'success');
+    closeModal();
+    await refreshAll();
+  } catch (e) { showToast('Could not record decision: ' + e.message, 'error'); }
+}
+
+async function handleFinanceDecision(decision){
+  const record = modalContext.record;
+  const comment = (document.getElementById('decision-comment').value || '').trim();
+  const paymentRef = (document.getElementById('payment-ref').value || '').trim();
+  if (decision === 'reject' && !comment) { showToast('Please add a comment explaining the rejection.', 'error'); return; }
+  try {
+    const patch = {
+      financeReviewer: currentAccount.username,
+      financeDecision: decision === 'process' ? 'Processed' : 'Rejected',
+      financeDecisionDate: nowIso(),
+      financeComments: comment,
+      paymentReference: paymentRef,
+      status: decision === 'process' ? STATUS.PROCESSED : STATUS.REJECTED_FINANCE,
+      historyLog: appendHistory(record.historyLog, currentAccount.username + ' (Finance) ' + (decision === 'process' ? 'marked the request as processed/paid.' : 'rejected the request.') + (comment ? ' Comment: ' + comment : '') + (paymentRef ? ' Payment ref: ' + paymentRef : ''))
+    };
+    await updateRequestItem(record.id, patch);
+    showToast('Finance decision recorded.', 'success');
+    closeModal();
+    await refreshAll();
+  } catch (e) { showToast('Could not record Finance decision: ' + e.message, 'error'); }
+}
+
+/* ---------------------------------------------------------------------
+   Auth flow
+   --------------------------------------------------------------------- */
+async function showSignedInUI(){
+  document.getElementById('login-overlay').style.display = 'none';
+  document.getElementById('top-bar').style.display = 'flex';
+  document.getElementById('tabs').style.display = 'flex';
+  document.getElementById('user-email-label').textContent = currentAccount.username;
+  document.getElementById('app-loading').style.display = 'block';
+  try {
+    await resolveSiteAndList();
+    await getColumnMap();
+    await resolveRolesList();
+    await loadRolesConfig();
+    setupRoleUI();
+    if (isAdminUser()) renderAdminTab();
+    await refreshAll();
+  } catch (e) {
+    showToast('Setup error: ' + e.message, 'error');
+    setupRoleUI(); // still show whatever role info we have (falls back to hardcoded defaults)
+  }
+  document.getElementById('app-loading').style.display = 'none';
+}
+document.getElementById('ms-signin-btn').addEventListener('click', async () => {
+  const errBox = document.getElementById('login-error');
+  errBox.style.display = 'none';
+  try {
+    await msalReady;
+    const result = await msalInstance.loginPopup({ scopes: GRAPH_SCOPES });
+    currentAccount = result.account;
+    await showSignedInUI();
+  } catch (e) {
+    errBox.textContent = 'Sign-in failed: ' + e.message;
+    errBox.style.display = 'block';
+  }
+});
+document.getElementById('signout-btn').addEventListener('click', async () => {
+  await msalReady;
+  msalInstance.logoutRedirect({ account: currentAccount });
+});
+
+(async function init(){
+  await msalReady;
+  const accounts = msalInstance.getAllAccounts();
+  if (accounts.length) {
+    currentAccount = accounts[0];
+    await showSignedInUI();
+  }
+})();
+</script>
+</body>
+</html>
