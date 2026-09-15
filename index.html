@@ -21,6 +21,8 @@
     --bad: #a3312a;
     --bad-bg: #fbeae9;
     --gold: #b8862f;
+    --info: #6b4fa0;
+    --info-bg: #f1ecf8;
   }
   * { box-sizing: border-box; }
   body {
@@ -140,6 +142,8 @@
   .btn-primary:hover:not(:disabled) { opacity: .9; }
   .btn-gold { background: var(--gold); color: #fff; }
   .btn-gold:hover:not(:disabled) { opacity: .9; }
+  .btn-info { background: var(--info); color: #fff; }
+  .btn-info:hover:not(:disabled) { opacity: .9; }
   .btn-ghost { background: transparent; color: var(--sub); border: 1px solid var(--line); }
   .btn-ghost:hover:not(:disabled) { background: var(--paper); }
   .btn-danger { background: var(--bad); color: #fff; }
@@ -166,8 +170,8 @@
   .status-pending-approval { background: var(--warn-bg); color: var(--warn); }
   .status-rejected-approver { background: var(--bad-bg); color: var(--bad); }
   .status-pending-finance { background: #e6eef8; color: var(--accent); }
+  .status-pending-info { background: var(--info-bg); color: var(--info); }
   .status-processed { background: var(--good-bg); color: var(--good); }
-  .status-rejected-finance { background: var(--bad-bg); color: var(--bad); }
 
   .toolbar-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
   .toolbar-row .filters { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -210,11 +214,13 @@
   #app-loading { display: none; padding: 60px 0; text-align: center; color: var(--sub); }
 
   /* ---- Analytics tab ---- */
-  .stat-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; }
+  .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px; }
   @media (max-width: 900px) { .stat-grid { grid-template-columns: repeat(2, 1fr); } }
   .stat-tile { background: var(--paper); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
   .stat-tile .stat-label { font-size: 11px; text-transform: uppercase; letter-spacing: .03em; color: var(--sub); margin-bottom: 6px; }
   .stat-tile .stat-value { font-size: 26px; font-weight: 700; color: var(--ink); }
+  .stat-tile-urgent.has-urgent { background: var(--warn-bg); border-color: var(--warn); }
+  .stat-tile-urgent.has-urgent .stat-value { color: var(--warn); }
 
   .hbar-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
   .hbar-label { width: 200px; font-size: 12.5px; color: var(--sub); flex-shrink: 0; text-align: right; }
@@ -338,13 +344,19 @@
           <label class="field-label">Currency</label>
           <select class="text-field" id="f-currency">
             <option value="SGD">SGD</option>
-            <option value="USD">USD</option>
             <option value="MYR">MYR</option>
-            <option value="EUR">EUR</option>
-            <option value="GBP">GBP</option>
-            <option value="Other">Other</option>
           </select>
         </div>
+      </div>
+
+      <div class="field-row" style="margin-top:14px; display:flex; align-items:center; gap:8px;">
+        <input type="checkbox" id="f-urgent" onchange="toggleUrgentJustification()" style="width:16px; height:16px;">
+        <label class="field-label" for="f-urgent" style="margin:0; cursor:pointer;">Urgent Payment</label>
+      </div>
+      <div class="field-row" id="urgent-justification-row" style="display:none; margin-top:8px;">
+        <label class="field-label">Justification for urgent payment <span class="req">*</span></label>
+        <textarea class="text-field" id="f-urgent-justification" placeholder="Explain why this needs to bypass the department approver."></textarea>
+        <div class="field-hint">This request will skip your department approver entirely and route straight to the designated urgent-payment approver, then on to Finance as usual.</div>
       </div>
 
       <div class="field-row" style="margin-top:10px;">
@@ -480,7 +492,7 @@
   <div class="view" id="view-admin">
     <div class="card" id="admin-list-warning" style="display:none; border-left: 3px solid var(--warn); background: var(--warn-bg);">
       <strong>The "AP System Roles" list wasn't found on this site.</strong>
-      <div class="field-hint" style="margin-top:6px;">Create a SharePoint list named exactly <code>AP System Roles</code> on the same site as your requests list, with columns: <code>RoleType</code> (Choice: "Department Approver", "Finance Team"), <code>Department</code> (Choice: Marketing/Operations/HR), <code>Email</code> (Single line of text). Then click Recheck below.</div>
+      <div class="field-hint" style="margin-top:6px;">Create a SharePoint list named exactly <code>AP System Roles</code> on the same site as your requests list, with columns: <code>RoleType</code> (Choice: "Department Approver", "Finance Team", "Urgent Payment Approver", "Requester Department"), <code>Department</code> (Choice: Marketing/Operations/HR — leave blank for Finance Team and Urgent Payment Approver rows), <code>Email</code> (Single line of text). Then click Recheck below.</div>
       <div class="btn-row" style="justify-content:flex-start; margin-top:10px;">
         <button type="button" class="btn btn-ghost" onclick="recheckRolesList()">Recheck</button>
       </div>
@@ -497,6 +509,15 @@
     <div class="card">
       <div class="card-head">
         <div>
+          <h2>Urgent Payment Approver</h2>
+          <div class="muted small">When a requester ticks "Urgent Payment" on a new request, it skips the department approver entirely and routes straight to this person, then to Finance as usual.</div>
+        </div>
+      </div>
+      <div id="admin-urgent-body"></div>
+    </div>
+    <div class="card">
+      <div class="card-head">
+        <div>
           <h2>Finance Team</h2>
           <div class="muted small">Anyone listed here sees the Finance Queue tab and can process every department's approved requests.</div>
         </div>
@@ -508,6 +529,23 @@
       <div class="btn-row" style="justify-content:flex-start; margin-top:14px;">
         <input class="text-field" id="admin-finance-new-email" placeholder="name@saxonrenewables.com" style="max-width:320px;">
         <button type="button" class="btn btn-primary" onclick="addFinanceMember()">Add to Finance team</button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <h2>Requester Departments</h2>
+          <div class="muted small">Optional — links a person's email to a department so their New Request form defaults to it. It's just a default: they can still change the department before submitting.</div>
+        </div>
+      </div>
+      <table class="data-table">
+        <thead><tr><th>Email</th><th>Department</th><th></th></tr></thead>
+        <tbody id="admin-requester-dept-body"></tbody>
+      </table>
+      <div class="btn-row" style="justify-content:flex-start; margin-top:14px; align-items:flex-end;">
+        <input class="text-field" id="admin-requester-dept-new-email" placeholder="name@saxonrenewables.com" style="max-width:280px;">
+        <select class="text-field" id="admin-requester-dept-new-dept" style="max-width:200px;"></select>
+        <button type="button" class="btn btn-primary" onclick="addRequesterDeptMapping()">Add mapping</button>
       </div>
     </div>
   </div>
@@ -536,11 +574,16 @@
       GitHub Pages URL). Grant it DELEGATED Graph permissions:
         - Sites.ReadWrite.All
         - User.Read
-      and have an admin grant consent.
+        - Mail.Send  (needed to email the Finance team when a request is approved)
+      and have an admin grant consent. If this app was registered before
+      Mail.Send was added, an admin needs to re-grant consent for the new
+      scope, and signed-in users may be prompted to sign in again once.
    2. Create a SharePoint list called "AP Requests" with the columns
       documented in the project notes (Department, VendorName, Amount,
       Status, etc.) — see the setup message you were given alongside this
-      file for the exact column list and types.
+      file for the exact column list and types. Also add two columns for
+      the Urgent Payment feature: IsUrgent (Yes/No) and
+      UrgentJustification (Multiple lines of text).
    3. Fill in the values below. */
 const TENANT_ID = "ab7c8c1e-dc1d-431f-ba8b-e4de2b047f8b"; // Directory (tenant) ID — "Finance AP Request" app registration
 const CLIENT_ID = "15ab80ca-fab7-4755-9f9b-5275c47dec90"; // Application (client) ID — "Finance AP Request" app registration
@@ -548,7 +591,7 @@ const SP_HOSTNAME = "saxonrenewables.sharepoint.com";    // your SharePoint tena
 const SP_SITE_PATH = "/sites/Operations";                // the site the list & document library live on
 const SP_LIST_NAME = "Finance AP Record";                // must match the SharePoint list's display name exactly
 const DOC_LIBRARY_ROOT = "AP Requests";                  // folder created inside the site's default "Documents" library
-const GRAPH_SCOPES = ["Sites.ReadWrite.All", "User.Read"];
+const GRAPH_SCOPES = ["Sites.ReadWrite.All", "User.Read", "Mail.Send"];
 const SP_ROLES_LIST_NAME = "AP System Roles";            // second SharePoint list — holds department approvers + Finance team, editable from the User Management tab
 
 /* Fallback values, used only until the "AP System Roles" list has rows —
@@ -581,16 +624,20 @@ const STATUS = {
   PENDING_APPROVAL: 'Pending Approval',
   REJECTED_APPROVER: 'Rejected by Approver',
   PENDING_FINANCE: 'Approved – Pending Finance',
-  PROCESSED: 'Processed',
-  REJECTED_FINANCE: 'Rejected by Finance'
+  PENDING_INFO: 'Pending – More Info Needed',
+  PROCESSED: 'Processed'
+  /* Finance no longer rejects requests outright — see handleFinanceDecision().
+     Finance can only mark a request Processed, or send it back to the requestor
+     via PENDING_INFO for more information. Only the department / urgent approver
+     step can end a request in a terminal rejection (REJECTED_APPROVER). */
 };
 const STATUS_CLASS = {
   [STATUS.DRAFT]: 'status-draft',
   [STATUS.PENDING_APPROVAL]: 'status-pending-approval',
   [STATUS.REJECTED_APPROVER]: 'status-rejected-approver',
   [STATUS.PENDING_FINANCE]: 'status-pending-finance',
-  [STATUS.PROCESSED]: 'status-processed',
-  [STATUS.REJECTED_FINANCE]: 'status-rejected-finance'
+  [STATUS.PENDING_INFO]: 'status-pending-info',
+  [STATUS.PROCESSED]: 'status-processed'
 };
 /* Same colors as the status pills above, reused for the Analytics charts so
    a status means the same thing everywhere in the app. */
@@ -599,8 +646,8 @@ const STATUS_COLOR_VAR = {
   [STATUS.PENDING_APPROVAL]: 'var(--warn)',
   [STATUS.REJECTED_APPROVER]: 'var(--bad)',
   [STATUS.PENDING_FINANCE]: 'var(--accent)',
-  [STATUS.PROCESSED]: 'var(--good)',
-  [STATUS.REJECTED_FINANCE]: 'var(--bad)'
+  [STATUS.PENDING_INFO]: 'var(--info)',
+  [STATUS.PROCESSED]: 'var(--good)'
 };
 
 const DATA_FIELD_MAP = {
@@ -609,6 +656,7 @@ const DATA_FIELD_MAP = {
   VendorName: 'vendorName', InvoiceNumber: 'invoiceNumber',
   InvoiceDate: 'invoiceDate', DueDate: 'dueDate', Amount: 'amount', Currency: 'currency',
   PaymentTerms: 'paymentTerms', Description: 'description', DocumentLinks: 'documentLinks',
+  IsUrgent: 'isUrgent', UrgentJustification: 'urgentJustification',
   Status: 'status', ApproverEmail: 'approverEmail', ApprovalDecision: 'approvalDecision',
   ApprovalDate: 'approvalDate', ApprovalComments: 'approvalComments',
   FinanceReviewer: 'financeReviewer', FinanceDecision: 'financeDecision',
@@ -631,6 +679,9 @@ let rolesListId = null;
 let rolesColumnMapCache = null;
 let deptApproverMap = {};  // { "Marketing": { itemId, email }, ... }
 let financeMembers = [];   // [{ itemId, email }, ...]
+let urgentApproverEmail = ''; // single email — routes Urgent Payment requests, bypassing the dept approver
+let urgentApproverItemId = null;
+let requesterDeptMap = []; // [{ itemId, email, department }, ...] — defaults a requester's New Request department, doesn't lock it
 
 const msalInstance = new msal.PublicClientApplication({
   auth: {
@@ -653,6 +704,15 @@ function approverDepartments(){
 function isFinanceUser(){
   const email = myEmail();
   return financeMembers.some(m => (m.email || '').toLowerCase() === email);
+}
+function isUrgentApprover(){
+  const email = myEmail();
+  return !!urgentApproverEmail && urgentApproverEmail.toLowerCase() === email;
+}
+function defaultDepartmentForUser(){
+  const email = myEmail();
+  const m = requesterDeptMap.find(r => (r.email || '').toLowerCase() === email);
+  return m ? m.department : '';
 }
 function isAdminUser(){
   const email = myEmail();
@@ -728,6 +788,9 @@ async function getRolesColumnMap(){
 async function loadRolesConfig(){
   deptApproverMap = {};
   financeMembers = [];
+  urgentApproverEmail = '';
+  urgentApproverItemId = null;
+  requesterDeptMap = [];
   if (!rolesListId) {
     Object.keys(DEPARTMENTS).forEach(d => { deptApproverMap[d] = { itemId: null, email: DEPARTMENTS[d].approverEmail || '' }; });
     financeMembers = FINANCE_TEAM.map(e => ({ itemId: null, email: e }));
@@ -747,6 +810,11 @@ async function loadRolesConfig(){
       deptApproverMap[department] = { itemId: item.id, email };
     } else if (roleType === 'Finance Team' && email) {
       financeMembers.push({ itemId: item.id, email });
+    } else if (roleType === 'Urgent Payment Approver' && email) {
+      urgentApproverEmail = email;
+      urgentApproverItemId = item.id;
+    } else if (roleType === 'Requester Department' && email && department) {
+      requesterDeptMap.push({ itemId: item.id, email, department });
     }
   });
   // Departments with no row yet on the list fall back to the hardcoded default.
@@ -775,6 +843,31 @@ async function saveDeptApprover(department){
       await graphFetch("/sites/" + siteId + "/lists/" + rolesListId + "/items", { method: 'POST', body: JSON.stringify({ fields: fieldsBody }) });
     }
     showToast(department + ' approver updated.', 'success');
+    await loadRolesConfig();
+    renderAdminTab();
+    setupRoleUI();
+  } catch (e) { showToast('Could not save: ' + e.message, 'error'); }
+  setBusy(btn, false);
+}
+async function saveUrgentApprover(){
+  const btn = document.getElementById('admin-urgent-approver-btn');
+  const input = document.getElementById('admin-urgent-approver-email');
+  const email = input.value.trim();
+  if (!email) { showToast('Enter an email address for the Urgent Payment Approver.', 'error'); return; }
+  if (!rolesListId) { showToast('The "' + SP_ROLES_LIST_NAME + '" list was not found on this site — create it first, then click Recheck.', 'error'); return; }
+  setBusy(btn, true, 'Saving…');
+  try {
+    const colMap = await getRolesColumnMap();
+    const fieldsBody = {};
+    if (colMap.RoleType) fieldsBody[colMap.RoleType] = 'Urgent Payment Approver';
+    if (colMap.Email) fieldsBody[colMap.Email] = email;
+    fieldsBody['Title'] = 'Urgent Payment Approver';
+    if (urgentApproverItemId) {
+      await graphFetch("/sites/" + siteId + "/lists/" + rolesListId + "/items/" + urgentApproverItemId + "/fields", { method: 'PATCH', body: JSON.stringify(fieldsBody) });
+    } else {
+      await graphFetch("/sites/" + siteId + "/lists/" + rolesListId + "/items", { method: 'POST', body: JSON.stringify({ fields: fieldsBody }) });
+    }
+    showToast('Urgent Payment Approver updated.', 'success');
     await loadRolesConfig();
     renderAdminTab();
     setupRoleUI();
@@ -811,6 +904,40 @@ async function removeFinanceMember(itemId){
     setupRoleUI();
   } catch (e) { showToast('Could not remove: ' + e.message, 'error'); }
 }
+async function addRequesterDeptMapping(){
+  const emailInput = document.getElementById('admin-requester-dept-new-email');
+  const deptSelect = document.getElementById('admin-requester-dept-new-dept');
+  const email = emailInput.value.trim();
+  const department = deptSelect ? deptSelect.value : '';
+  if (!email) { showToast('Enter an email address.', 'error'); return; }
+  if (!department) { showToast('Choose a department.', 'error'); return; }
+  if (requesterDeptMap.some(m => m.email.toLowerCase() === email.toLowerCase())) { showToast('That email is already linked to a department.', 'error'); return; }
+  if (!rolesListId) { showToast('The "' + SP_ROLES_LIST_NAME + '" list was not found on this site — create it first, then click Recheck.', 'error'); return; }
+  try {
+    const colMap = await getRolesColumnMap();
+    const fieldsBody = {};
+    if (colMap.RoleType) fieldsBody[colMap.RoleType] = 'Requester Department';
+    if (colMap.Department) fieldsBody[colMap.Department] = department;
+    if (colMap.Email) fieldsBody[colMap.Email] = email;
+    fieldsBody['Title'] = 'Requester — ' + email;
+    await graphFetch("/sites/" + siteId + "/lists/" + rolesListId + "/items", { method: 'POST', body: JSON.stringify({ fields: fieldsBody }) });
+    emailInput.value = '';
+    showToast('Linked ' + email + ' to ' + department + '.', 'success');
+    await loadRolesConfig();
+    renderAdminTab();
+    setupRoleUI();
+  } catch (e) { showToast('Could not add: ' + e.message, 'error'); }
+}
+async function removeRequesterDeptMapping(itemId){
+  if (!confirm('Remove this requester-department link?')) return;
+  try {
+    await graphFetch("/sites/" + siteId + "/lists/" + rolesListId + "/items/" + itemId, { method: 'DELETE' });
+    showToast('Removed.', 'success');
+    await loadRolesConfig();
+    renderAdminTab();
+    setupRoleUI();
+  } catch (e) { showToast('Could not remove: ' + e.message, 'error'); }
+}
 async function recheckRolesList(){
   await resolveRolesList();
   await loadRolesConfig();
@@ -832,11 +959,29 @@ function renderAdminTab(){
       '</div>';
     }).join('');
   }
+  const urgentEl = document.getElementById('admin-urgent-body');
+  if (urgentEl) {
+    urgentEl.innerHTML = '<div class="field-row" style="display:flex; gap:8px; align-items:flex-end;">' +
+      '<div style="flex:1;"><label class="field-label">Urgent Payment Approver</label>' +
+      '<input class="text-field" id="admin-urgent-approver-email" value="' + escapeHtml(urgentApproverEmail) + '" placeholder="name@saxonrenewables.com"></div>' +
+      '<button type="button" class="btn btn-primary" id="admin-urgent-approver-btn" onclick="saveUrgentApprover()">Save</button>' +
+    '</div>' + (urgentApproverEmail ? '' : '<div class="field-hint" style="margin-top:6px;">Not set yet — until an email is saved here, requesters cannot submit an Urgent Payment request.</div>');
+  }
   const financeEl = document.getElementById('admin-finance-body');
   if (financeEl) {
     financeEl.innerHTML = financeMembers.length ? financeMembers.map(m =>
       '<tr><td>' + escapeHtml(m.email) + '</td><td>' + (m.itemId ? '<button type="button" class="btn btn-ghost" onclick="removeFinanceMember(\'' + m.itemId + '\')">Remove</button>' : '<span class="muted small">default — add the list to edit</span>') + '</td></tr>'
     ).join('') : '<tr class="empty-row"><td colspan="2">No Finance team members configured yet.</td></tr>';
+  }
+  const requesterDeptEl = document.getElementById('admin-requester-dept-body');
+  if (requesterDeptEl) {
+    requesterDeptEl.innerHTML = requesterDeptMap.length ? requesterDeptMap.map(m =>
+      '<tr><td>' + escapeHtml(m.email) + '</td><td>' + escapeHtml(m.department) + '</td><td><button type="button" class="btn btn-ghost" onclick="removeRequesterDeptMapping(\'' + m.itemId + '\')">Remove</button></td></tr>'
+    ).join('') : '<tr class="empty-row"><td colspan="3">No requester-department links configured yet.</td></tr>';
+  }
+  const requesterDeptSelect = document.getElementById('admin-requester-dept-new-dept');
+  if (requesterDeptSelect && !requesterDeptSelect.options.length) {
+    requesterDeptSelect.innerHTML = Object.keys(DEPARTMENTS).map(d => '<option value="' + escapeHtml(d) + '">' + escapeHtml(d) + '</option>').join('');
   }
 }
 
@@ -953,6 +1098,9 @@ function statusPill(status){
   const cls = STATUS_CLASS[status] || 'status-draft';
   return '<span class="status-pill ' + cls + '">' + escapeHtml(status || STATUS.DRAFT) + '</span>';
 }
+function urgentTag(record){
+  return record.isUrgent ? ' <span class="status-pill" style="background:var(--warn-bg); color:var(--warn); margin-left:4px;">URGENT</span>' : '';
+}
 function escapeHtml(s){
   return String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
 }
@@ -993,11 +1141,18 @@ function renderNewFileChips(){
   ).join('');
 }
 function removeNewFile(i){ newRequestFiles.splice(i, 1); renderNewFileChips(); }
+function toggleUrgentJustification(){
+  const checked = document.getElementById('f-urgent').checked;
+  document.getElementById('urgent-justification-row').style.display = checked ? '' : 'none';
+}
 function clearNewRequestForm(){
-  ['f-department','f-vendor','f-invoice-number','f-payment-terms','f-invoice-date','f-due-date','f-amount','f-description'].forEach(id => {
+  ['f-vendor','f-invoice-number','f-payment-terms','f-invoice-date','f-due-date','f-amount','f-description','f-urgent-justification'].forEach(id => {
     document.getElementById(id).value = '';
   });
+  document.getElementById('f-department').value = defaultDepartmentForUser();
   document.getElementById('f-currency').value = 'SGD';
+  document.getElementById('f-urgent').checked = false;
+  document.getElementById('urgent-justification-row').style.display = 'none';
   newRequestFiles.length = 0;
   renderNewFileChips();
 }
@@ -1011,7 +1166,9 @@ function readNewRequestForm(){
     dueDate: document.getElementById('f-due-date').value ? new Date(document.getElementById('f-due-date').value).toISOString() : '',
     amount: parseFloat(document.getElementById('f-amount').value || '0'),
     currency: document.getElementById('f-currency').value,
-    description: document.getElementById('f-description').value.trim()
+    description: document.getElementById('f-description').value.trim(),
+    isUrgent: document.getElementById('f-urgent').checked,
+    urgentJustification: document.getElementById('f-urgent-justification').value.trim()
   };
 }
 function validateNewRequestForm(form){
@@ -1020,6 +1177,8 @@ function validateNewRequestForm(form){
   if (!form.dueDate) return 'Please enter a due date.';
   if (!form.amount || form.amount <= 0) return 'Please enter an amount greater than zero.';
   if (!form.description) return 'Please describe the purpose of this request.';
+  if (form.isUrgent && !form.urgentJustification) return 'Please provide a justification for the urgent payment.';
+  if (form.isUrgent && !urgentApproverEmail) return 'No Urgent Payment Approver has been configured yet. Contact an admin (User Management tab) before submitting an urgent request.';
   return null;
 }
 async function handleSaveDraft(){
@@ -1030,15 +1189,16 @@ async function handleSaveDraft(){
   try {
     const requestId = genRequestId();
     const docs = await uploadFilesForRequest(form.department, requestId, newRequestFiles);
+    const approverEmail = form.isUrgent ? (urgentApproverEmail || '') : ((deptApproverMap[form.department] || {}).email || '');
     const record = Object.assign({}, form, {
       title: form.vendorName, requestId,
       requestorName: currentAccount.name || currentAccount.username,
       requestorEmail: currentAccount.username,
       documentLinks: JSON.stringify(docs),
       status: STATUS.DRAFT,
-      approverEmail: (deptApproverMap[form.department] || {}).email || '',
+      approverEmail,
       submittedDate: '',
-      historyLog: appendHistory('', currentAccount.username + ' saved as draft.')
+      historyLog: appendHistory('', currentAccount.username + ' saved as draft.' + (form.isUrgent ? ' (marked Urgent Payment)' : ''))
     });
     await createRequestItem(record);
     showToast('Draft saved.', 'success');
@@ -1056,15 +1216,19 @@ async function handleSubmitRequest(){
   try {
     const requestId = genRequestId();
     const docs = await uploadFilesForRequest(form.department, requestId, newRequestFiles);
+    const approverEmail = form.isUrgent ? urgentApproverEmail : ((deptApproverMap[form.department] || {}).email || '');
+    const historyMsg = form.isUrgent
+      ? currentAccount.username + ' submitted an URGENT PAYMENT request for approval — routed directly to the urgent approver (' + approverEmail + '), bypassing the ' + form.department + ' department approver.'
+      : currentAccount.username + ' submitted for approval (' + form.department + ').';
     const record = Object.assign({}, form, {
       title: form.vendorName, requestId,
       requestorName: currentAccount.name || currentAccount.username,
       requestorEmail: currentAccount.username,
       documentLinks: JSON.stringify(docs),
       status: STATUS.PENDING_APPROVAL,
-      approverEmail: (deptApproverMap[form.department] || {}).email || '',
+      approverEmail,
       submittedDate: nowIso(),
-      historyLog: appendHistory('', currentAccount.username + ' submitted for approval (' + form.department + ').')
+      historyLog: appendHistory('', historyMsg)
     });
     await createRequestItem(record);
     showToast('Request ' + requestId + ' submitted for approval.', 'success');
@@ -1088,10 +1252,11 @@ function setupRoleUI(){
   const badges = ['Requester'];
   const depts = approverDepartments();
   depts.forEach(d => badges.push('Approver · ' + d));
+  if (isUrgentApprover()) badges.push('Urgent Approver');
   if (isFinanceUser()) badges.push('Finance');
   if (isAdminUser()) badges.push('Super Admin');
   badgesEl.innerHTML = badges.map(b => '<span class="role-badge">' + escapeHtml(b) + '</span>').join('');
-  document.getElementById('tab-approvals').style.display = depts.length ? '' : 'none';
+  document.getElementById('tab-approvals').style.display = (depts.length || isUrgentApprover()) ? '' : 'none';
   document.getElementById('tab-finance').style.display = isFinanceUser() ? '' : 'none';
   document.getElementById('tab-admin').style.display = isAdminUser() ? '' : 'none';
 }
@@ -1113,7 +1278,7 @@ function renderMineTable(){
   document.getElementById('count-mine').classList.toggle('zero', mine.length === 0);
   const body = document.getElementById('mine-table-body');
   body.innerHTML = rows.length ? rows.map(r =>
-    '<tr onclick="openDetail(\'' + r.id + '\',\'mine\')"><td>' + escapeHtml(r.requestId) + '</td><td>' + escapeHtml(r.department) +
+    '<tr onclick="openDetail(\'' + r.id + '\',\'mine\')"><td>' + escapeHtml(r.requestId) + urgentTag(r) + '</td><td>' + escapeHtml(r.department) +
     '</td><td>' + escapeHtml(r.vendorName) + '</td><td>' + fmtAmount(r.amount, r.currency) + '</td><td>' + fmtDate(r.dueDate) +
     '</td><td>' + statusPill(r.status) + '</td><td>' + (r.status === STATUS.DRAFT ? '<span class="muted">draft</span>' : fmtDateTime(r.submittedDate)) + '</td></tr>'
   ).join('') : '<tr class="empty-row"><td colspan="7">No requests yet.</td></tr>';
@@ -1131,14 +1296,15 @@ function renderMineTable(){
 function renderApprovalsTable(){
   const depts = approverDepartments();
   const email = myEmail();
-  const pending = allItemsCache.filter(r => depts.includes(r.department) && r.status === STATUS.PENDING_APPROVAL)
+  const pending = allItemsCache.filter(r => r.status === STATUS.PENDING_APPROVAL &&
+      (r.isUrgent ? (r.approverEmail || '').toLowerCase() === email : depts.includes(r.department)))
     .sort((a, b) => (a.submittedDate || '').localeCompare(b.submittedDate || ''));
   const decided = allItemsCache.filter(r => (r.approverEmail || '').toLowerCase() === email && r.approvalDate)
     .sort((a, b) => (b.approvalDate || '').localeCompare(a.approvalDate || ''));
   document.getElementById('count-approvals').textContent = pending.length;
   document.getElementById('count-approvals').classList.toggle('zero', pending.length === 0);
   document.getElementById('approvals-table-body').innerHTML = pending.length ? pending.map(r =>
-    '<tr onclick="openDetail(\'' + r.id + '\',\'approve\')"><td>' + escapeHtml(r.requestId) + '</td><td>' + escapeHtml(r.department) +
+    '<tr onclick="openDetail(\'' + r.id + '\',\'approve\')"><td>' + escapeHtml(r.requestId) + urgentTag(r) + '</td><td>' + escapeHtml(r.department) +
     '</td><td>' + escapeHtml(r.requestorName) + '</td><td>' + escapeHtml(r.vendorName) + '</td><td>' + fmtAmount(r.amount, r.currency) +
     '</td><td>' + fmtDate(r.dueDate) + '</td><td>' + fmtDateTime(r.submittedDate) + '</td></tr>'
   ).join('') : '<tr class="empty-row"><td colspan="7">Nothing waiting on your approval.</td></tr>';
@@ -1153,13 +1319,13 @@ function renderApprovalsTable(){
 function renderFinanceTable(){
   const deptFilter = document.getElementById('finance-dept-filter').value;
   const pending = allItemsCache.filter(r => r.status === STATUS.PENDING_FINANCE && (!deptFilter || r.department === deptFilter))
-    .sort((a, b) => (a.approvalDate || '').localeCompare(b.approvalDate || ''));
-  const history = allItemsCache.filter(r => (r.status === STATUS.PROCESSED || r.status === STATUS.REJECTED_FINANCE) && (!deptFilter || r.department === deptFilter))
+    .sort((a, b) => (Number(!!b.isUrgent) - Number(!!a.isUrgent)) || (a.approvalDate || '').localeCompare(b.approvalDate || ''));
+  const history = allItemsCache.filter(r => r.status === STATUS.PROCESSED && (!deptFilter || r.department === deptFilter))
     .sort((a, b) => (b.financeDecisionDate || '').localeCompare(a.financeDecisionDate || ''));
   document.getElementById('count-finance').textContent = pending.length;
   document.getElementById('count-finance').classList.toggle('zero', pending.length === 0);
   document.getElementById('finance-table-body').innerHTML = pending.length ? pending.map(r =>
-    '<tr onclick="openDetail(\'' + r.id + '\',\'finance\')"><td>' + escapeHtml(r.requestId) + '</td><td>' + escapeHtml(r.department) +
+    '<tr onclick="openDetail(\'' + r.id + '\',\'finance\')"><td>' + escapeHtml(r.requestId) + urgentTag(r) + '</td><td>' + escapeHtml(r.department) +
     '</td><td>' + escapeHtml(r.requestorName) + '</td><td>' + escapeHtml(r.vendorName) + '</td><td>' + fmtAmount(r.amount, r.currency) +
     '</td><td>' + fmtDate(r.dueDate) + '</td><td>' + escapeHtml(r.approverEmail) + '</td></tr>'
   ).join('') : '<tr class="empty-row"><td colspan="7">No requests awaiting Finance review.</td></tr>';
@@ -1202,16 +1368,22 @@ function renderAnalyticsStats(){
   const counts = {};
   Object.values(STATUS).forEach(s => { counts[s] = 0; });
   scope.forEach(r => { counts[r.status] = (counts[r.status] || 0) + 1; });
-  const rejectedTotal = (counts[STATUS.REJECTED_APPROVER] || 0) + (counts[STATUS.REJECTED_FINANCE] || 0);
+  const rejectedTotal = counts[STATUS.REJECTED_APPROVER] || 0;
+  const urgentAwaitingFinance = scope.filter(r => r.isUrgent && r.status === STATUS.PENDING_FINANCE).length;
   const tiles = [
     { label: 'Total requests', value: scope.length },
     { label: 'Pending approval', value: counts[STATUS.PENDING_APPROVAL] || 0 },
     { label: 'Pending finance', value: counts[STATUS.PENDING_FINANCE] || 0 },
+    { label: 'More info needed', value: counts[STATUS.PENDING_INFO] || 0 },
     { label: 'Processed', value: counts[STATUS.PROCESSED] || 0 },
-    { label: 'Rejected', value: rejectedTotal }
+    { label: 'Rejected', value: rejectedTotal },
+    { label: 'Urgent — awaiting Finance', value: urgentAwaitingFinance, urgent: true }
   ];
   document.getElementById('analytics-stats').innerHTML = tiles.map(t =>
-    '<div class="stat-tile"><div class="stat-label">' + escapeHtml(t.label) + '</div><div class="stat-value">' + t.value + '</div></div>'
+    '<div class="stat-tile' + (t.urgent ? ' stat-tile-urgent' + (t.value > 0 ? ' has-urgent' : '') : '') + '">' +
+      '<div class="stat-label">' + escapeHtml(t.label) + '</div><div class="stat-value">' + t.value + '</div>' +
+      (t.urgent && t.value > 0 ? '<div class="field-hint" style="color:var(--warn); margin-top:4px;">Finance should action these first.</div>' : '') +
+    '</div>'
   ).join('');
 }
 function renderAnalyticsStatusChart(){
@@ -1274,9 +1446,8 @@ function buildTimelineSteps(record){
 
   let financeState = 'pending';
   if (approvalState === 'done') {
-    if (record.status === STATUS.PENDING_FINANCE) financeState = 'current';
+    if (record.status === STATUS.PENDING_FINANCE || record.status === STATUS.PENDING_INFO) financeState = 'current';
     else if (record.financeDecision === 'Processed') financeState = 'done';
-    else if (record.financeDecision === 'Rejected') financeState = 'rejected';
   }
   steps.push({ label: 'Finance Review', date: record.financeDecisionDate, state: financeState, sub: record.financeReviewer ? ('by ' + record.financeReviewer) : '' });
   return steps;
@@ -1293,7 +1464,7 @@ function renderTimelineRow(record){
   ).join('');
   return '<div class="timeline-row" onclick="openDetail(\'' + record.id + '\',\'mine\')">' +
     '<div class="timeline-row-head">' +
-      '<div><strong>' + escapeHtml(record.requestId) + '</strong> — ' + escapeHtml(record.vendorName) + ' <span class="muted small">(' + escapeHtml(record.department) + ')</span></div>' +
+      '<div><strong>' + escapeHtml(record.requestId) + '</strong>' + urgentTag(record) + ' — ' + escapeHtml(record.vendorName) + ' <span class="muted small">(' + escapeHtml(record.department) + ')</span></div>' +
       '<div>' + statusPill(record.status) + '</div>' +
     '</div>' +
     '<div class="who">Requested by ' + escapeHtml(record.requestorName) + ' · ' + fmtAmount(record.amount, record.currency) + '</div>' +
@@ -1351,6 +1522,17 @@ function docLinksHtml(record){
   return '<div class="doc-link-list">' + docs.map(d => '<a href="' + d.url + '" target="_blank" rel="noopener">' + escapeHtml(d.name) + '</a>').join('') + '</div>';
 }
 function baseDetailGrid(record){
+  let urgentRow;
+  if (record.isUrgent) {
+    urgentRow = '<div><div class="k">Urgent payment</div><span class="status-pill" style="background:var(--warn-bg); color:var(--warn);">URGENT — bypassed dept approver</span></div>';
+  } else if (record.urgentJustification) {
+    urgentRow = '<div><div class="k">Urgent payment</div><span class="status-pill" style="background:var(--line); color:var(--sub);">Was urgent — downgraded to normal flow</span></div>';
+  } else {
+    urgentRow = '<div><div class="k">Urgent payment</div><span class="muted">No</span></div>';
+  }
+  const urgentJustificationRow = record.urgentJustification
+    ? '<div class="full"><div class="k">Urgent justification</div>' + escapeHtml(record.urgentJustification) + '</div>'
+    : '';
   return '' +
     '<div class="detail-grid">' +
       '<div><div class="k">Department</div>' + escapeHtml(record.department) + '</div>' +
@@ -1363,7 +1545,9 @@ function baseDetailGrid(record){
       '<div><div class="k">Due date</div>' + fmtDate(record.dueDate) + '</div>' +
       '<div><div class="k">Amount</div>' + fmtAmount(record.amount, record.currency) + '</div>' +
       '<div><div class="k">Payment terms</div>' + escapeHtml(record.paymentTerms || '—') + '</div>' +
+      urgentRow +
       '<div class="full"><div class="k">Description</div>' + escapeHtml(record.description) + '</div>' +
+      urgentJustificationRow +
       '<div class="full"><div class="k">Documents</div>' + docLinksHtml(record) + '</div>' +
     '</div>';
 }
@@ -1401,6 +1585,7 @@ function renderModalBody(record, mode){
   }
   if (mode === 'approve') {
     html += '<hr class="section-divider">' +
+      (record.isUrgent ? '<div class="field-hint" style="margin-bottom:10px;">This request was marked <strong>Urgent Payment</strong> and routed directly to you, bypassing the ' + escapeHtml(record.department) + ' department approver.</div>' : '') +
       '<div class="field-row"><label class="field-label">Comments (required if rejecting)</label>' +
       '<textarea class="text-field" id="decision-comment"></textarea></div>' +
       '<div class="btn-row">' +
@@ -1412,15 +1597,22 @@ function renderModalBody(record, mode){
     html += '<hr class="section-divider">' +
       '<div class="field-row"><label class="field-label">Payment reference</label>' +
       '<input class="text-field" id="payment-ref" placeholder="e.g. bank transaction ID"></div>' +
-      '<div class="field-row"><label class="field-label">Comments (required if rejecting)</label>' +
+      '<div class="field-row"><label class="field-label">Comments (required when requesting more info)</label>' +
       '<textarea class="text-field" id="decision-comment"></textarea></div>' +
       '<div class="btn-row">' +
-        '<button type="button" class="btn btn-danger" onclick="handleFinanceDecision(\'reject\')">Reject</button>' +
+        '<button type="button" class="btn btn-info" onclick="handleFinanceDecision(\'info\')">Request more info</button>' +
         '<button type="button" class="btn btn-gold" onclick="handleFinanceDecision(\'process\')">Mark as processed / paid</button>' +
       '</div>';
   }
   if (mode === 'mine' && record.status === STATUS.REJECTED_APPROVER && record.requestorEmail.toLowerCase() === myEmail()) {
     html += '<hr class="section-divider"><div class="field-hint">This request was rejected by your department approver. Submit a new request if you would like to resend it, using the approver comments above to make corrections.</div>';
+  }
+  if (mode === 'mine' && record.status === STATUS.PENDING_INFO && record.requestorEmail.toLowerCase() === myEmail()) {
+    html += '<hr class="section-divider">' +
+      '<div class="field-hint" style="margin-bottom:8px;">Finance needs more information before they can process this request — see their comment above under "Finance decision".</div>' +
+      '<div class="field-row"><label class="field-label">Your reply <span class="req">*</span></label>' +
+      '<textarea class="text-field" id="info-reply" placeholder="Provide the requested information..."></textarea></div>' +
+      '<div class="btn-row"><button type="button" class="btn btn-primary" onclick="handleResubmitInfo(\'' + record.id + '\')">Send back to Finance</button></div>';
   }
   return html;
 }
@@ -1432,12 +1624,20 @@ async function handleSubmitDraft(itemId){
     showToast('This draft is missing required fields (due date, amount or description) — delete it and re-enter it on the New Request tab.', 'error');
     return;
   }
+  if (record.isUrgent && !urgentApproverEmail) {
+    showToast('No Urgent Payment Approver has been configured yet. Contact an admin (User Management tab) before submitting this urgent draft.', 'error');
+    return;
+  }
   try {
+    const approverEmail = record.isUrgent ? urgentApproverEmail : ((deptApproverMap[record.department] || {}).email || '');
+    const historyMsg = record.isUrgent
+      ? currentAccount.username + ' submitted this URGENT PAYMENT draft for approval — routed directly to the urgent approver (' + approverEmail + '), bypassing the ' + record.department + ' department approver.'
+      : currentAccount.username + ' submitted this draft for approval (' + record.department + ').';
     const patch = {
       status: STATUS.PENDING_APPROVAL,
-      approverEmail: (deptApproverMap[record.department] || {}).email || '',
+      approverEmail,
       submittedDate: nowIso(),
-      historyLog: appendHistory(record.historyLog, currentAccount.username + ' submitted this draft for approval (' + record.department + ').')
+      historyLog: appendHistory(record.historyLog, historyMsg)
     };
     await updateRequestItem(itemId, patch);
     showToast('Request ' + record.requestId + ' submitted for approval.', 'success');
@@ -1461,41 +1661,118 @@ async function handleApprovalDecision(decision){
   const comment = (document.getElementById('decision-comment').value || '').trim();
   if (decision === 'reject' && !comment) { showToast('Please add a comment explaining the rejection.', 'error'); return; }
   try {
-    const patch = {
-      approverEmail: currentAccount.username,
-      approvalDecision: decision === 'approve' ? 'Approved' : 'Rejected',
-      approvalDate: nowIso(),
-      approvalComments: comment,
-      status: decision === 'approve' ? STATUS.PENDING_FINANCE : STATUS.REJECTED_APPROVER,
-      historyLog: appendHistory(record.historyLog, currentAccount.username + ' ' + (decision === 'approve' ? 'approved' : 'rejected') + ' the request.' + (comment ? ' Comment: ' + comment : ''))
-    };
+    let patch;
+    let toastMsg = 'Decision recorded.';
+    if (decision === 'reject' && record.isUrgent) {
+      // The Urgent Payment Approver rejected it — don't terminate the request. Fall back to
+      // the normal flow: route it to the department approver for standard review, same as
+      // if it had never been marked urgent.
+      const deptApproverEmail = (deptApproverMap[record.department] || {}).email || '';
+      patch = {
+        isUrgent: false,
+        approverEmail: deptApproverEmail,
+        status: STATUS.PENDING_APPROVAL,
+        historyLog: appendHistory(record.historyLog, currentAccount.username + ' (Urgent Payment Approver) rejected the urgent request.' + (comment ? ' Comment: ' + comment : '') + ' Routed to the normal ' + record.department + ' department approver' + (deptApproverEmail ? ' (' + deptApproverEmail + ')' : ' (none configured)') + ' for standard review.')
+      };
+      toastMsg = 'Rejected — routed to the ' + record.department + ' department approver for normal review.';
+      if (!deptApproverEmail) toastMsg += ' Warning: no department approver is configured for ' + record.department + ' yet.';
+    } else {
+      patch = {
+        approverEmail: currentAccount.username,
+        approvalDecision: decision === 'approve' ? 'Approved' : 'Rejected',
+        approvalDate: nowIso(),
+        approvalComments: comment,
+        status: decision === 'approve' ? STATUS.PENDING_FINANCE : STATUS.REJECTED_APPROVER,
+        historyLog: appendHistory(record.historyLog, currentAccount.username + ' ' + (decision === 'approve' ? 'approved' : 'rejected') + ' the request.' + (comment ? ' Comment: ' + comment : ''))
+      };
+    }
     await updateRequestItem(record.id, patch);
-    showToast('Decision recorded.', 'success');
+    if (decision === 'approve') {
+      await notifyFinanceOfApproval(Object.assign({}, record, patch));
+    }
+    showToast(toastMsg, decision === 'reject' && record.isUrgent && !((deptApproverMap[record.department] || {}).email) ? 'error' : 'success');
     closeModal();
     await refreshAll();
   } catch (e) { showToast('Could not record decision: ' + e.message, 'error'); }
 }
+async function notifyFinanceOfApproval(record){
+  if (!financeMembers.length) return;
+  try {
+    const toRecipients = financeMembers.map(m => ({ emailAddress: { address: m.email } }));
+    const subject = '[AP Request] ' + record.requestId + (record.isUrgent ? ' — URGENT — ' : ' — ') + 'approved, ready for Finance review';
+    const bodyLines = [
+      record.isUrgent ? 'URGENT PAYMENT — please action this ahead of non-urgent requests.\n' : '',
+      'Request ' + record.requestId + ' has been approved and is now awaiting Finance review.',
+      '',
+      'Department: ' + record.department,
+      'Vendor: ' + record.vendorName,
+      'Amount: ' + fmtAmount(record.amount, record.currency),
+      'Due date: ' + fmtDate(record.dueDate),
+      'Requestor: ' + record.requestorName + ' <' + record.requestorEmail + '>',
+      'Approved by: ' + currentAccount.username,
+      record.isUrgent ? ('Urgent justification: ' + (record.urgentJustification || '—')) : '',
+      '',
+      'Open the AP Request System and go to the Finance Queue tab to review and process this request.'
+    ].filter(line => line !== '').join('\n');
+    await graphFetch('/me/sendMail', {
+      method: 'POST',
+      body: JSON.stringify({
+        message: { subject, body: { contentType: 'Text', content: bodyLines }, toRecipients },
+        saveToSentItems: false
+      })
+    });
+  } catch (e) {
+    // Non-fatal — the approval itself already succeeded; just flag that the email didn't go out.
+    showToast('Request approved, but the Finance notification email could not be sent: ' + e.message, 'error');
+  }
+}
 
 async function handleFinanceDecision(decision){
+  // Finance has two possible actions: mark a request processed/paid, or send it back to the
+  // requestor for more information. Finance does not reject requests outright — that decision
+  // point is upstream, at the department / urgent approver step.
   const record = modalContext.record;
   const comment = (document.getElementById('decision-comment').value || '').trim();
   const paymentRef = (document.getElementById('payment-ref').value || '').trim();
-  if (decision === 'reject' && !comment) { showToast('Please add a comment explaining the rejection.', 'error'); return; }
+  if (decision === 'info' && !comment) {
+    showToast('Please explain what additional information is needed.', 'error');
+    return;
+  }
   try {
+    const statusByDecision = { process: STATUS.PROCESSED, info: STATUS.PENDING_INFO };
+    const financeDecisionByDecision = { process: 'Processed', info: 'Pending Info' };
+    const historyVerb = { process: 'marked the request as processed/paid.', info: 'requested more information before this can be processed.' };
     const patch = {
       financeReviewer: currentAccount.username,
-      financeDecision: decision === 'process' ? 'Processed' : 'Rejected',
+      financeDecision: financeDecisionByDecision[decision],
       financeDecisionDate: nowIso(),
       financeComments: comment,
       paymentReference: paymentRef,
-      status: decision === 'process' ? STATUS.PROCESSED : STATUS.REJECTED_FINANCE,
-      historyLog: appendHistory(record.historyLog, currentAccount.username + ' (Finance) ' + (decision === 'process' ? 'marked the request as processed/paid.' : 'rejected the request.') + (comment ? ' Comment: ' + comment : '') + (paymentRef ? ' Payment ref: ' + paymentRef : ''))
+      status: statusByDecision[decision],
+      historyLog: appendHistory(record.historyLog, currentAccount.username + ' (Finance) ' + historyVerb[decision] + (comment ? ' Comment: ' + comment : '') + (paymentRef ? ' Payment ref: ' + paymentRef : ''))
     };
     await updateRequestItem(record.id, patch);
-    showToast('Finance decision recorded.', 'success');
+    showToast(decision === 'info' ? 'Sent back to the requestor for more information.' : 'Finance decision recorded.', 'success');
     closeModal();
     await refreshAll();
   } catch (e) { showToast('Could not record Finance decision: ' + e.message, 'error'); }
+}
+async function handleResubmitInfo(itemId){
+  const record = findRecord(itemId);
+  if (!record) return;
+  const replyEl = document.getElementById('info-reply');
+  const reply = (replyEl.value || '').trim();
+  if (!reply) { showToast('Please add the additional information before sending it back to Finance.', 'error'); return; }
+  try {
+    const patch = {
+      status: STATUS.PENDING_FINANCE,
+      historyLog: appendHistory(record.historyLog, currentAccount.username + ' provided additional information and sent the request back to Finance. Reply: ' + reply)
+    };
+    await updateRequestItem(itemId, patch);
+    showToast('Sent back to Finance.', 'success');
+    closeModal();
+    await refreshAll();
+  } catch (e) { showToast('Could not send back to Finance: ' + e.message, 'error'); }
 }
 
 /* ---------------------------------------------------------------------
@@ -1513,6 +1790,8 @@ async function showSignedInUI(){
     await resolveRolesList();
     await loadRolesConfig();
     setupRoleUI();
+    const defaultDept = defaultDepartmentForUser();
+    if (defaultDept) document.getElementById('f-department').value = defaultDept;
     if (isAdminUser()) renderAdminTab();
     await refreshAll();
   } catch (e) {
