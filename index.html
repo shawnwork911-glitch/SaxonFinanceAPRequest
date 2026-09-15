@@ -584,13 +584,19 @@
       file for the exact column list and types. Also add two columns for
       the Urgent Payment feature: IsUrgent (Yes/No) and
       UrgentJustification (Multiple lines of text).
-   3. Fill in the values below. */
+   3. Supporting documents upload to the "Finance Documents" folder inside
+      the "Process Improvement" document library on this site (not the
+      default "Documents" library) — that library must already exist;
+      the app creates the Finance Documents/Department/RequestID
+      subfolders on its own the first time they're needed.
+   4. Fill in the values below. */
 const TENANT_ID = "ab7c8c1e-dc1d-431f-ba8b-e4de2b047f8b"; // Directory (tenant) ID — "Finance AP Request" app registration
 const CLIENT_ID = "15ab80ca-fab7-4755-9f9b-5275c47dec90"; // Application (client) ID — "Finance AP Request" app registration
 const SP_HOSTNAME = "saxonrenewables.sharepoint.com";    // your SharePoint tenant hostname
 const SP_SITE_PATH = "/sites/Operations";                // the site the list & document library live on
 const SP_LIST_NAME = "Finance AP Record";                // must match the SharePoint list's display name exactly
-const DOC_LIBRARY_ROOT = "AP Requests";                  // folder created inside the site's default "Documents" library
+const SP_DOC_LIBRARY_NAME = "Process Improvement";       // the document library (not the site's default "Documents") that holds the upload folder
+const DOC_LIBRARY_ROOT = "Finance Documents";            // folder inside that library — uploads land in DOC_LIBRARY_ROOT/Department/RequestID
 const GRAPH_SCOPES = ["Sites.ReadWrite.All", "User.Read", "Mail.Send"];
 const SP_ROLES_LIST_NAME = "AP System Roles";            // second SharePoint list — holds department approvers + Finance team, editable from the User Management tab
 
@@ -666,6 +672,7 @@ const DATA_FIELD_MAP = {
 
 let currentAccount = null;
 let siteId = null, listId = null;
+let docLibraryDriveId = null; // the "Process Improvement" library's drive ID — see resolveDocLibraryDrive()
 let columnMapCache = null;
 let allItemsCache = [];
 let currentView = 'new';
@@ -757,6 +764,14 @@ async function resolveSiteAndList(){
   const lists = await graphFetch("/sites/" + siteId + "/lists?$filter=displayName eq '" + encodeURIComponent(SP_LIST_NAME) + "'");
   if (!lists.value.length) throw new Error('SharePoint list "' + SP_LIST_NAME + '" was not found on ' + SP_SITE_PATH + '.');
   listId = lists.value[0].id;
+}
+/* Uploads go to the "Finance Documents" folder inside the "Process Improvement" document
+   library — a separate library from the site's default "Documents", so it needs its own
+   drive lookup rather than the "/sites/{siteId}/drive" shorthand. */
+async function resolveDocLibraryDrive(){
+  const drives = await graphFetch("/sites/" + siteId + "/drives?$select=id,name");
+  const match = (drives.value || []).find(d => (d.name || '').toLowerCase() === SP_DOC_LIBRARY_NAME.toLowerCase());
+  docLibraryDriveId = match ? match.id : null;
 }
 async function getColumnMap(){
   if (columnMapCache) return columnMapCache;
@@ -1018,13 +1033,14 @@ function itemToRecord(item, colMap){
 
 /* ---- Folder creation + file upload ---- */
 async function ensureFolderPath(fullPath){
+  if (!docLibraryDriveId) throw new Error('Could not find the "' + SP_DOC_LIBRARY_NAME + '" document library on this site.');
   const segments = fullPath.split('/').filter(Boolean);
   let built = '';
   for (const seg of segments) {
     const parentEncoded = built ? encodeURIComponent(built).replace(/%2F/g, '/') : '';
     try {
       await graphFetch(
-        "/sites/" + siteId + "/drive/root:/" + (parentEncoded ? parentEncoded + '/' : '') + ":/children",
+        "/drives/" + docLibraryDriveId + "/root:/" + (parentEncoded ? parentEncoded + '/' : '') + ":/children",
         { method: 'POST', body: JSON.stringify({ name: seg, folder: {}, "@microsoft.graph.conflictBehavior": "fail" }) }
       );
     } catch (e) {
@@ -1034,11 +1050,12 @@ async function ensureFolderPath(fullPath){
   }
 }
 async function uploadOneFile(folderPath, file){
+  if (!docLibraryDriveId) throw new Error('Could not find the "' + SP_DOC_LIBRARY_NAME + '" document library on this site.');
   const safeName = file.name.replace(/[#%*:<>?/\\{|}]/g, '_');
   const encodedPath = encodeURIComponent(folderPath + '/' + safeName).replace(/%2F/g, '/');
   const buf = await file.arrayBuffer();
   const item = await graphFetch(
-    "/sites/" + siteId + "/drive/root:/" + encodedPath + ":/content?@microsoft.graph.conflictBehavior=replace",
+    "/drives/" + docLibraryDriveId + "/root:/" + encodedPath + ":/content?@microsoft.graph.conflictBehavior=replace",
     { method: 'PUT', body: buf, headers: { 'Content-Type': file.type || 'application/octet-stream' } }
   );
   return { name: file.name, url: item.webUrl };
@@ -1240,6 +1257,7 @@ async function handleSubmitRequest(){
       historyLog: appendHistory('', historyMsg)
     });
     await createRequestItem(record);
+    await notifyApproverOfNewRequest(record);
     showToast('Request ' + requestId + ' submitted for approval.', 'success');
     clearNewRequestForm();
     await refreshAll();
@@ -1649,6 +1667,7 @@ async function handleSubmitDraft(itemId){
       historyLog: appendHistory(record.historyLog, historyMsg)
     };
     await updateRequestItem(itemId, patch);
+    await notifyApproverOfNewRequest(Object.assign({}, record, patch));
     showToast('Request ' + record.requestId + ' submitted for approval.', 'success');
     closeModal();
     await refreshAll();
@@ -1698,11 +1717,43 @@ async function handleApprovalDecision(decision){
     await updateRequestItem(record.id, patch);
     if (decision === 'approve') {
       await notifyFinanceOfApproval(Object.assign({}, record, patch));
+    } else if (decision === 'reject' && record.isUrgent && patch.approverEmail) {
+      // Fell back to the department approver — that's effectively a new request in their queue.
+      await notifyApproverOfNewRequest(Object.assign({}, record, patch));
     }
     showToast(toastMsg, decision === 'reject' && record.isUrgent && !((deptApproverMap[record.department] || {}).email) ? 'error' : 'success');
     closeModal();
     await refreshAll();
   } catch (e) { showToast('Could not record decision: ' + e.message, 'error'); }
+}
+async function notifyApproverOfNewRequest(record){
+  if (!record.approverEmail) return;
+  try {
+    const subject = '[AP Request] ' + record.requestId + (record.isUrgent ? ' — URGENT — ' : ' — ') + 'needs your approval';
+    const bodyLines = [
+      record.isUrgent ? 'URGENT PAYMENT — this was routed directly to you as the Urgent Payment Approver, bypassing the ' + record.department + ' department approver. Please action it first.\n' : '',
+      'Request ' + record.requestId + ' has been submitted and is waiting on your approval.',
+      '',
+      'Department: ' + record.department,
+      'Vendor: ' + record.vendorName,
+      'Amount: ' + fmtAmount(record.amount, record.currency),
+      'Due date: ' + fmtDate(record.dueDate),
+      'Requestor: ' + record.requestorName + ' <' + record.requestorEmail + '>',
+      record.isUrgent ? ('Urgent justification: ' + (record.urgentJustification || '—')) : '',
+      '',
+      'Open the AP Request System and go to the Approvals tab to review this request.'
+    ].filter(line => line !== '').join('\n');
+    await graphFetch('/me/sendMail', {
+      method: 'POST',
+      body: JSON.stringify({
+        message: { subject, body: { contentType: 'Text', content: bodyLines }, toRecipients: [{ emailAddress: { address: record.approverEmail } }] },
+        saveToSentItems: false
+      })
+    });
+  } catch (e) {
+    // Non-fatal — the submission itself already succeeded; just flag that the email didn't go out.
+    showToast('Request submitted, but the approver notification email could not be sent: ' + e.message, 'error');
+  }
 }
 async function notifyFinanceOfApproval(record){
   if (!financeMembers.length) return;
@@ -1796,6 +1847,7 @@ async function showSignedInUI(){
   try {
     await resolveSiteAndList();
     await getColumnMap();
+    try { await resolveDocLibraryDrive(); } catch (e) { docLibraryDriveId = null; } // non-fatal — only blocks file uploads, not the rest of the app
     await resolveRolesList();
     await loadRolesConfig();
     setupRoleUI();
