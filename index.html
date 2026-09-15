@@ -23,6 +23,26 @@
     --gold: #b8862f;
     --info: #6b4fa0;
     --info-bg: #f1ecf8;
+    --chip-bg: #16202b; /* toast/tooltip — a fixed dark chip that contrasts on either theme, not tied to --ink */
+    --chip-fg: #ffffff;
+  }
+  :root[data-theme="dark"] {
+    --ink: #e7ecf2;
+    --sub: #96a6b6;
+    --line: #2b3542;
+    --paper: #0e141b;
+    --panel: #161e28;
+    --accent: #4a8fc7;
+    --accent-light: #1c2836;
+    --good: #2f9e68;
+    --good-bg: #123322;
+    --warn: #cf9433;
+    --warn-bg: #332508;
+    --bad: #d9534f;
+    --bad-bg: #341715;
+    --gold: #c79a42;
+    --info: #8a6fc0;
+    --info-bg: #241a33;
   }
   * { box-sizing: border-box; }
   body {
@@ -41,6 +61,15 @@
   h2 { font-size: 16px; font-weight: 700; margin-bottom: 4px; }
   .muted { color: var(--sub); }
   .small { font-size: 12.5px; }
+
+  /* ---- Theme toggle ---- */
+  #theme-toggle-btn {
+    position: fixed; top: 14px; right: 16px; z-index: 310;
+    font-size: 12.5px; font-weight: 600; background: var(--panel); color: var(--sub);
+    border: 1px solid var(--line); border-radius: 6px; padding: 7px 13px; cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  }
+  #theme-toggle-btn:hover { background: var(--paper); }
 
   /* ---- Top bar / auth ---- */
   #login-overlay {
@@ -159,6 +188,8 @@
   }
   table.data-table tbody tr { cursor: pointer; }
   table.data-table tbody tr:hover { background: var(--accent-light); }
+  table.data-table tbody tr.row-urgent { background: var(--bad-bg); box-shadow: inset 3px 0 0 var(--bad); }
+  table.data-table tbody tr.row-urgent:hover { background: var(--bad-bg); filter: brightness(0.96); }
   .empty-row td { text-align: center; color: var(--sub); padding: 30px 12px; cursor: default; }
   .empty-row:hover { background: transparent !important; }
 
@@ -169,7 +200,7 @@
   .status-draft { background: var(--line); color: var(--sub); }
   .status-pending-approval { background: var(--warn-bg); color: var(--warn); }
   .status-rejected-approver { background: var(--bad-bg); color: var(--bad); }
-  .status-pending-finance { background: #e6eef8; color: var(--accent); }
+  .status-pending-finance { background: var(--accent-light); color: var(--accent); }
   .status-pending-info { background: var(--info-bg); color: var(--info); }
   .status-processed { background: var(--good-bg); color: var(--good); }
 
@@ -180,7 +211,7 @@
   /* ---- Toast ---- */
   #toast {
     position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
-    background: var(--ink); color: #fff; padding: 12px 20px; border-radius: 8px;
+    background: var(--chip-bg); color: var(--chip-fg); padding: 12px 20px; border-radius: 8px;
     font-size: 13.5px; z-index: 400; display: none; max-width: 460px; box-shadow: 0 6px 24px rgba(0,0,0,0.3);
   }
   #toast.error { background: var(--bad); }
@@ -214,13 +245,15 @@
   #app-loading { display: none; padding: 60px 0; text-align: center; color: var(--sub); }
 
   /* ---- Analytics tab ---- */
-  .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px; }
-  @media (max-width: 900px) { .stat-grid { grid-template-columns: repeat(2, 1fr); } }
-  .stat-tile { background: var(--paper); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
-  .stat-tile .stat-label { font-size: 11px; text-transform: uppercase; letter-spacing: .03em; color: var(--sub); margin-bottom: 6px; }
-  .stat-tile .stat-value { font-size: 26px; font-weight: 700; color: var(--ink); }
+  .stat-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 10px; }
+  @media (max-width: 1150px) { .stat-grid { grid-template-columns: repeat(4, 1fr); } }
+  @media (max-width: 700px) { .stat-grid { grid-template-columns: repeat(2, 1fr); } }
+  .stat-tile { background: var(--paper); border: 1px solid var(--line); border-radius: 8px; padding: 12px 12px; }
+  .stat-tile .stat-label { font-size: 10.5px; text-transform: uppercase; letter-spacing: .02em; color: var(--sub); margin-bottom: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .stat-tile .stat-value { font-size: 24px; font-weight: 700; color: var(--ink); }
   .stat-tile-urgent.has-urgent { background: var(--warn-bg); border-color: var(--warn); }
   .stat-tile-urgent.has-urgent .stat-value { color: var(--warn); }
+  .stat-tile-urgent .field-hint { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
   .hbar-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
   .hbar-label { width: 200px; font-size: 12.5px; color: var(--sub); flex-shrink: 0; text-align: right; }
@@ -235,7 +268,7 @@
   .vbar-label { margin-top: 6px; font-size: 11px; color: var(--sub); }
 
   #chart-tooltip {
-    position: fixed; display: none; background: var(--ink); color: #fff; font-size: 12px;
+    position: fixed; display: none; background: var(--chip-bg); color: var(--chip-fg); font-size: 12px;
     padding: 6px 10px; border-radius: 5px; pointer-events: none; z-index: 500; white-space: nowrap;
   }
 
@@ -245,7 +278,7 @@
   .timeline-row .who { font-size: 12.5px; color: var(--sub); margin-top: 2px; }
   .stepper { display: flex; align-items: flex-start; margin-top: 16px; }
   .step { flex: 1; text-align: center; position: relative; }
-  .step .dot { width: 14px; height: 14px; border-radius: 50%; margin: 0 auto 6px; border: 2px solid var(--line); background: #fff; position: relative; z-index: 1; }
+  .step .dot { width: 14px; height: 14px; border-radius: 50%; margin: 0 auto 6px; border: 2px solid var(--line); background: var(--panel); position: relative; z-index: 1; }
   .step.done .dot { background: var(--good); border-color: var(--good); }
   .step.current .dot { background: var(--warn); border-color: var(--warn); }
   .step.rejected .dot { background: var(--bad); border-color: var(--bad); }
@@ -255,10 +288,12 @@
   .step .step-label { font-size: 11.5px; font-weight: 600; color: var(--ink); }
   .step .step-date { font-size: 10.5px; color: var(--sub); margin-top: 2px; }
 
-  @media print { #top-bar, #tabs, .toolbar-row, .btn-row, #modal-overlay, #chart-tooltip { display: none !important; } }
+  @media print { #top-bar, #tabs, .toolbar-row, .btn-row, #modal-overlay, #chart-tooltip, #theme-toggle-btn { display: none !important; } }
 </style>
 </head>
 <body>
+
+<button type="button" id="theme-toggle-btn" title="Toggle dark / light mode">Dark mode</button>
 
 <div id="login-overlay">
   <div id="login-card">
@@ -411,7 +446,15 @@
     <div class="card">
       <div class="toolbar-row">
         <h2 style="margin:0;">Pending My Approval</h2>
-        <button type="button" class="btn btn-ghost" onclick="refreshAll()">Refresh</button>
+        <div class="filters">
+          <select class="filter-select" id="approvals-dept-filter" onchange="renderApprovalsTable()">
+            <option value="">All departments</option>
+            <option value="Marketing">Marketing</option>
+            <option value="Operations">Operations</option>
+            <option value="HR">HR</option>
+          </select>
+          <button type="button" class="btn btn-ghost" onclick="refreshAll()">Refresh</button>
+        </div>
       </div>
       <table class="data-table">
         <thead><tr><th>Request ID</th><th>Department</th><th>Requestor</th><th>Vendor</th><th>Amount</th><th>Due date</th><th>Submitted</th></tr></thead>
@@ -463,6 +506,14 @@
         <div>
           <h2>Overview</h2>
           <div class="muted small" id="analytics-scope-note"></div>
+        </div>
+        <div class="filters">
+          <select class="filter-select" id="analytics-dept-filter" onchange="renderAnalyticsAll()">
+            <option value="">All departments</option>
+            <option value="Marketing">Marketing</option>
+            <option value="Operations">Operations</option>
+            <option value="HR">HR</option>
+          </select>
         </div>
       </div>
       <div class="stat-grid" id="analytics-stats"></div>
@@ -689,6 +740,7 @@ let financeMembers = [];   // [{ itemId, email }, ...]
 let urgentApproverEmail = ''; // single email — routes Urgent Payment requests, bypassing the dept approver
 let urgentApproverItemId = null;
 let requesterDeptMap = []; // [{ itemId, email, department }, ...] — defaults a requester's New Request department, doesn't lock it
+const APP_URL = window.location.origin + window.location.pathname; // linked from notification emails so recipients can click straight into the app
 
 const msalInstance = new msal.PublicClientApplication({
   auth: {
@@ -1125,7 +1177,10 @@ function statusPill(status){
   return '<span class="status-pill ' + cls + '">' + escapeHtml(status || STATUS.DRAFT) + '</span>';
 }
 function urgentTag(record){
-  return record.isUrgent ? ' <span class="status-pill" style="background:var(--warn-bg); color:var(--warn); margin-left:4px;">URGENT</span>' : '';
+  return record.isUrgent ? ' <span class="status-pill" style="background:var(--bad-bg); color:var(--bad); margin-left:4px;">URGENT</span>' : '';
+}
+function urgentRowAttr(record){
+  return record.isUrgent ? ' class="row-urgent"' : '';
 }
 function escapeHtml(s){
   return String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
@@ -1305,7 +1360,7 @@ function renderMineTable(){
   document.getElementById('count-mine').classList.toggle('zero', mine.length === 0);
   const body = document.getElementById('mine-table-body');
   body.innerHTML = rows.length ? rows.map(r =>
-    '<tr onclick="openDetail(\'' + r.id + '\',\'mine\')"><td>' + escapeHtml(r.requestId) + urgentTag(r) + '</td><td>' + escapeHtml(r.department) +
+    '<tr' + urgentRowAttr(r) + ' onclick="openDetail(\'' + r.id + '\',\'mine\')"><td>' + escapeHtml(r.requestId) + urgentTag(r) + '</td><td>' + escapeHtml(r.department) +
     '</td><td>' + escapeHtml(r.vendorName) + '</td><td>' + fmtAmount(r.amount, r.currency) + '</td><td>' + fmtDate(r.dueDate) +
     '</td><td>' + statusPill(r.status) + '</td><td>' + (r.status === STATUS.DRAFT ? '<span class="muted">draft</span>' : fmtDateTime(r.submittedDate)) + '</td></tr>'
   ).join('') : '<tr class="empty-row"><td colspan="7">No requests yet.</td></tr>';
@@ -1313,7 +1368,7 @@ function renderMineTable(){
   const drafts = mine.filter(r => r.status === STATUS.DRAFT);
   document.getElementById('draft-card').style.display = drafts.length ? '' : 'none';
   document.getElementById('draft-table-body').innerHTML = drafts.map(r =>
-    '<tr onclick="openDetail(\'' + r.id + '\',\'edit-draft\')"><td>' + escapeHtml(r.requestId) + '</td><td>' + escapeHtml(r.department) +
+    '<tr' + urgentRowAttr(r) + ' onclick="openDetail(\'' + r.id + '\',\'edit-draft\')"><td>' + escapeHtml(r.requestId) + urgentTag(r) + '</td><td>' + escapeHtml(r.department) +
     '</td><td>' + escapeHtml(r.vendorName) + '</td><td>' + fmtAmount(r.amount, r.currency) + '</td><td>' + fmtDateTime(r.submittedDate || '') +
     '</td><td><button type="button" class="btn btn-ghost" onclick="event.stopPropagation(); openDetail(\'' + r.id + '\',\'edit-draft\')">Open</button></td></tr>'
   ).join('');
@@ -1323,20 +1378,23 @@ function renderMineTable(){
 function renderApprovalsTable(){
   const depts = approverDepartments();
   const email = myEmail();
-  const pending = allItemsCache.filter(r => r.status === STATUS.PENDING_APPROVAL &&
-      (r.isUrgent ? (r.approverEmail || '').toLowerCase() === email : depts.includes(r.department)))
+  const deptFilter = document.getElementById('approvals-dept-filter').value;
+  // The tab badge always reflects everything waiting on you, regardless of the department filter.
+  const pendingAll = allItemsCache.filter(r => r.status === STATUS.PENDING_APPROVAL &&
+      (r.isUrgent ? (r.approverEmail || '').toLowerCase() === email : depts.includes(r.department)));
+  const pending = pendingAll.filter(r => !deptFilter || r.department === deptFilter)
     .sort((a, b) => (a.submittedDate || '').localeCompare(b.submittedDate || ''));
-  const decided = allItemsCache.filter(r => (r.approverEmail || '').toLowerCase() === email && r.approvalDate)
+  const decided = allItemsCache.filter(r => (r.approverEmail || '').toLowerCase() === email && r.approvalDate && (!deptFilter || r.department === deptFilter))
     .sort((a, b) => (b.approvalDate || '').localeCompare(a.approvalDate || ''));
-  document.getElementById('count-approvals').textContent = pending.length;
-  document.getElementById('count-approvals').classList.toggle('zero', pending.length === 0);
+  document.getElementById('count-approvals').textContent = pendingAll.length;
+  document.getElementById('count-approvals').classList.toggle('zero', pendingAll.length === 0);
   document.getElementById('approvals-table-body').innerHTML = pending.length ? pending.map(r =>
-    '<tr onclick="openDetail(\'' + r.id + '\',\'approve\')"><td>' + escapeHtml(r.requestId) + urgentTag(r) + '</td><td>' + escapeHtml(r.department) +
+    '<tr' + urgentRowAttr(r) + ' onclick="openDetail(\'' + r.id + '\',\'approve\')"><td>' + escapeHtml(r.requestId) + urgentTag(r) + '</td><td>' + escapeHtml(r.department) +
     '</td><td>' + escapeHtml(r.requestorName) + '</td><td>' + escapeHtml(r.vendorName) + '</td><td>' + fmtAmount(r.amount, r.currency) +
     '</td><td>' + fmtDate(r.dueDate) + '</td><td>' + fmtDateTime(r.submittedDate) + '</td></tr>'
   ).join('') : '<tr class="empty-row"><td colspan="7">Nothing waiting on your approval.</td></tr>';
   document.getElementById('approvals-history-body').innerHTML = decided.length ? decided.slice(0, 50).map(r =>
-    '<tr onclick="openDetail(\'' + r.id + '\',\'mine\')"><td>' + escapeHtml(r.requestId) + '</td><td>' + escapeHtml(r.department) +
+    '<tr' + urgentRowAttr(r) + ' onclick="openDetail(\'' + r.id + '\',\'mine\')"><td>' + escapeHtml(r.requestId) + urgentTag(r) + '</td><td>' + escapeHtml(r.department) +
     '</td><td>' + escapeHtml(r.requestorName) + '</td><td>' + escapeHtml(r.vendorName) + '</td><td>' + fmtAmount(r.amount, r.currency) +
     '</td><td>' + statusPill(r.approvalDecision === 'Rejected' ? STATUS.REJECTED_APPROVER : STATUS.PENDING_FINANCE) + '</td><td>' + fmtDateTime(r.approvalDate) + '</td></tr>'
   ).join('') : '<tr class="empty-row"><td colspan="7">No decisions yet.</td></tr>';
@@ -1352,12 +1410,12 @@ function renderFinanceTable(){
   document.getElementById('count-finance').textContent = pending.length;
   document.getElementById('count-finance').classList.toggle('zero', pending.length === 0);
   document.getElementById('finance-table-body').innerHTML = pending.length ? pending.map(r =>
-    '<tr onclick="openDetail(\'' + r.id + '\',\'finance\')"><td>' + escapeHtml(r.requestId) + urgentTag(r) + '</td><td>' + escapeHtml(r.department) +
+    '<tr' + urgentRowAttr(r) + ' onclick="openDetail(\'' + r.id + '\',\'finance\')"><td>' + escapeHtml(r.requestId) + urgentTag(r) + '</td><td>' + escapeHtml(r.department) +
     '</td><td>' + escapeHtml(r.requestorName) + '</td><td>' + escapeHtml(r.vendorName) + '</td><td>' + fmtAmount(r.amount, r.currency) +
     '</td><td>' + fmtDate(r.dueDate) + '</td><td>' + escapeHtml(r.approverEmail) + '</td></tr>'
   ).join('') : '<tr class="empty-row"><td colspan="7">No requests awaiting Finance review.</td></tr>';
   document.getElementById('finance-history-body').innerHTML = history.length ? history.slice(0, 100).map(r =>
-    '<tr onclick="openDetail(\'' + r.id + '\',\'mine\')"><td>' + escapeHtml(r.requestId) + '</td><td>' + escapeHtml(r.department) +
+    '<tr' + urgentRowAttr(r) + ' onclick="openDetail(\'' + r.id + '\',\'mine\')"><td>' + escapeHtml(r.requestId) + urgentTag(r) + '</td><td>' + escapeHtml(r.department) +
     '</td><td>' + escapeHtml(r.vendorName) + '</td><td>' + fmtAmount(r.amount, r.currency) + '</td><td>' + statusPill(r.status) +
     '</td><td>' + fmtDateTime(r.financeDecisionDate) + '</td><td>' + escapeHtml(r.paymentReference || '—') + '</td></tr>'
   ).join('') : '<tr class="empty-row"><td colspan="7">No history yet.</td></tr>';
@@ -1368,9 +1426,13 @@ function isPrivilegedViewer(){
   return isFinanceUser() || approverDepartments().length > 0 || isAdminUser();
 }
 function analyticsScope(){
-  if (isPrivilegedViewer()) return allItemsCache.slice();
-  const email = myEmail();
-  return allItemsCache.filter(r => (r.requestorEmail || '').toLowerCase() === email);
+  let scope = isPrivilegedViewer()
+    ? allItemsCache.slice()
+    : allItemsCache.filter(r => (r.requestorEmail || '').toLowerCase() === myEmail());
+  const deptFilterEl = document.getElementById('analytics-dept-filter');
+  const deptFilter = deptFilterEl ? deptFilterEl.value : '';
+  if (deptFilter) scope = scope.filter(r => r.department === deptFilter);
+  return scope;
 }
 function showChartTooltip(evt, text){
   const tip = document.getElementById('chart-tooltip');
@@ -1386,9 +1448,12 @@ function moveChartTooltip(evt){
 function hideChartTooltip(){ document.getElementById('chart-tooltip').style.display = 'none'; }
 
 function renderAnalyticsScopeNote(){
-  document.getElementById('analytics-scope-note').textContent = isPrivilegedViewer()
-    ? 'Showing all requests across every department.'
-    : 'Showing your own requests only.';
+  const deptFilterEl = document.getElementById('analytics-dept-filter');
+  const deptFilter = deptFilterEl ? deptFilterEl.value : '';
+  const who = isPrivilegedViewer() ? 'all requests' : 'your own requests';
+  document.getElementById('analytics-scope-note').textContent = deptFilter
+    ? 'Showing ' + who + ' for ' + deptFilter + '.'
+    : 'Showing ' + who + ' across every department.';
 }
 function renderAnalyticsStats(){
   const scope = analyticsScope();
@@ -1414,13 +1479,16 @@ function renderAnalyticsStats(){
   ).join('');
 }
 function renderAnalyticsStatusChart(){
-  const scope = analyticsScope();
+  // Drafts aren't real submissions yet, so they're excluded from this breakdown entirely
+  // (not just hidden) — otherwise percentages here wouldn't sum to 100%.
+  const scope = analyticsScope().filter(r => r.status !== STATUS.DRAFT);
   const counts = {};
   Object.values(STATUS).forEach(s => { counts[s] = 0; });
   scope.forEach(r => { counts[r.status] = (counts[r.status] || 0) + 1; });
   const total = scope.length || 1;
-  const max = Math.max(1, ...Object.values(counts));
-  const html = Object.values(STATUS).map(s => {
+  const statusesToShow = Object.values(STATUS).filter(s => s !== STATUS.DRAFT);
+  const max = Math.max(1, ...statusesToShow.map(s => counts[s] || 0));
+  const html = statusesToShow.map(s => {
     const n = counts[s] || 0;
     const pct = Math.round((n / total) * 100);
     const widthPct = Math.max(Math.round((n / max) * 100), n > 0 ? 2 : 0);
@@ -1551,7 +1619,7 @@ function docLinksHtml(record){
 function baseDetailGrid(record){
   let urgentRow;
   if (record.isUrgent) {
-    urgentRow = '<div><div class="k">Urgent payment</div><span class="status-pill" style="background:var(--warn-bg); color:var(--warn);">URGENT — bypassed dept approver</span></div>';
+    urgentRow = '<div><div class="k">Urgent payment</div><span class="status-pill" style="background:var(--bad-bg); color:var(--bad);">URGENT</span></div>';
   } else if (record.urgentJustification) {
     urgentRow = '<div><div class="k">Urgent payment</div><span class="status-pill" style="background:var(--line); color:var(--sub);">Was urgent — downgraded to normal flow</span></div>';
   } else {
@@ -1613,10 +1681,10 @@ function renderModalBody(record, mode){
   if (mode === 'approve') {
     html += '<hr class="section-divider">' +
       (record.isUrgent ? '<div class="field-hint" style="margin-bottom:10px;">This request was marked <strong>Urgent Payment</strong> and routed directly to you, bypassing the ' + escapeHtml(record.department) + ' department approver.</div>' : '') +
-      '<div class="field-row"><label class="field-label">Comments (required if rejecting)</label>' +
+      '<div class="field-row" id="decision-comment-row" style="display:none;"><label class="field-label">Comments <span class="req">*</span></label>' +
       '<textarea class="text-field" id="decision-comment"></textarea></div>' +
       '<div class="btn-row">' +
-        '<button type="button" class="btn btn-danger" onclick="handleApprovalDecision(\'reject\')">Reject</button>' +
+        '<button type="button" class="btn btn-danger" id="reject-btn" onclick="handleRejectClick()">Reject</button>' +
         '<button type="button" class="btn btn-primary" onclick="handleApprovalDecision(\'approve\')">Approve → send to Finance</button>' +
       '</div>';
   }
@@ -1684,6 +1752,19 @@ async function deleteDraft(itemId){
   } catch (e) { showToast('Could not delete draft: ' + e.message, 'error'); }
 }
 
+function handleRejectClick(){
+  // First click reveals the comment box (kept hidden until then so the modal isn't
+  // cluttered when the approver is just going to click Approve). Second click submits.
+  const row = document.getElementById('decision-comment-row');
+  const btn = document.getElementById('reject-btn');
+  if (row.style.display === 'none') {
+    row.style.display = '';
+    btn.textContent = 'Confirm Reject';
+    document.getElementById('decision-comment').focus();
+    return;
+  }
+  handleApprovalDecision('reject');
+}
 async function handleApprovalDecision(decision){
   const record = modalContext.record;
   const comment = (document.getElementById('decision-comment').value || '').trim();
@@ -1726,30 +1807,42 @@ async function handleApprovalDecision(decision){
     await refreshAll();
   } catch (e) { showToast('Could not record decision: ' + e.message, 'error'); }
 }
+/* Sends a simple HTML email via Graph so the "Open the AP Request System" link is clickable
+   (a plain-text body relies on the recipient's mail client to auto-detect links). Every dynamic
+   value passed in `lines` should already be escapeHtml()'d by the caller — only the caller knows
+   which pieces are trusted markup (like the link) versus user-entered text. */
+async function sendGraphMail(toEmails, subject, lines){
+  const content = '<div style="font-family:Segoe UI,Helvetica,Arial,sans-serif; font-size:14px; color:#16202b; line-height:1.5;">' + lines.join('<br>') + '</div>';
+  await graphFetch('/me/sendMail', {
+    method: 'POST',
+    body: JSON.stringify({
+      message: {
+        subject,
+        body: { contentType: 'HTML', content },
+        toRecipients: toEmails.map(e => ({ emailAddress: { address: e } }))
+      },
+      saveToSentItems: false
+    })
+  });
+}
 async function notifyApproverOfNewRequest(record){
   if (!record.approverEmail) return;
   try {
     const subject = '[AP Request] ' + record.requestId + (record.isUrgent ? ' — URGENT — ' : ' — ') + 'needs your approval';
-    const bodyLines = [
-      record.isUrgent ? 'URGENT PAYMENT — this was routed directly to you as the Urgent Payment Approver, bypassing the ' + record.department + ' department approver. Please action it first.\n' : '',
-      'Request ' + record.requestId + ' has been submitted and is waiting on your approval.',
+    const lines = [
+      record.isUrgent ? '<strong>URGENT PAYMENT — please prioritize this request.</strong>' : '',
+      'Request ' + escapeHtml(record.requestId) + ' has been submitted and is waiting on your approval.',
       '',
-      'Department: ' + record.department,
-      'Vendor: ' + record.vendorName,
-      'Amount: ' + fmtAmount(record.amount, record.currency),
-      'Due date: ' + fmtDate(record.dueDate),
-      'Requestor: ' + record.requestorName + ' <' + record.requestorEmail + '>',
-      record.isUrgent ? ('Urgent justification: ' + (record.urgentJustification || '—')) : '',
+      'Department: ' + escapeHtml(record.department),
+      'Vendor: ' + escapeHtml(record.vendorName),
+      'Amount: ' + escapeHtml(fmtAmount(record.amount, record.currency)),
+      'Due date: ' + escapeHtml(fmtDate(record.dueDate)),
+      'Requestor: ' + escapeHtml(record.requestorName) + ' &lt;' + escapeHtml(record.requestorEmail) + '&gt;',
+      record.isUrgent ? ('Urgent justification: ' + escapeHtml(record.urgentJustification || '—')) : '',
       '',
-      'Open the AP Request System and go to the Approvals tab to review this request.'
-    ].filter(line => line !== '').join('\n');
-    await graphFetch('/me/sendMail', {
-      method: 'POST',
-      body: JSON.stringify({
-        message: { subject, body: { contentType: 'Text', content: bodyLines }, toRecipients: [{ emailAddress: { address: record.approverEmail } }] },
-        saveToSentItems: false
-      })
-    });
+      '<a href="' + escapeHtml(APP_URL) + '">Open the AP Request System</a> and go to the Approvals tab to review this request.'
+    ].filter(line => line !== '');
+    await sendGraphMail([record.approverEmail], subject, lines);
   } catch (e) {
     // Non-fatal — the submission itself already succeeded; just flag that the email didn't go out.
     showToast('Request submitted, but the approver notification email could not be sent: ' + e.message, 'error');
@@ -1758,29 +1851,22 @@ async function notifyApproverOfNewRequest(record){
 async function notifyFinanceOfApproval(record){
   if (!financeMembers.length) return;
   try {
-    const toRecipients = financeMembers.map(m => ({ emailAddress: { address: m.email } }));
     const subject = '[AP Request] ' + record.requestId + (record.isUrgent ? ' — URGENT — ' : ' — ') + 'approved, ready for Finance review';
-    const bodyLines = [
-      record.isUrgent ? 'URGENT PAYMENT — please action this ahead of non-urgent requests.\n' : '',
-      'Request ' + record.requestId + ' has been approved and is now awaiting Finance review.',
+    const lines = [
+      record.isUrgent ? '<strong>URGENT PAYMENT — please action this ahead of non-urgent requests.</strong>' : '',
+      'Request ' + escapeHtml(record.requestId) + ' has been approved and is now awaiting Finance review.',
       '',
-      'Department: ' + record.department,
-      'Vendor: ' + record.vendorName,
-      'Amount: ' + fmtAmount(record.amount, record.currency),
-      'Due date: ' + fmtDate(record.dueDate),
-      'Requestor: ' + record.requestorName + ' <' + record.requestorEmail + '>',
-      'Approved by: ' + currentAccount.username,
-      record.isUrgent ? ('Urgent justification: ' + (record.urgentJustification || '—')) : '',
+      'Department: ' + escapeHtml(record.department),
+      'Vendor: ' + escapeHtml(record.vendorName),
+      'Amount: ' + escapeHtml(fmtAmount(record.amount, record.currency)),
+      'Due date: ' + escapeHtml(fmtDate(record.dueDate)),
+      'Requestor: ' + escapeHtml(record.requestorName) + ' &lt;' + escapeHtml(record.requestorEmail) + '&gt;',
+      'Approved by: ' + escapeHtml(currentAccount.username),
+      record.isUrgent ? ('Urgent justification: ' + escapeHtml(record.urgentJustification || '—')) : '',
       '',
-      'Open the AP Request System and go to the Finance Queue tab to review and process this request.'
-    ].filter(line => line !== '').join('\n');
-    await graphFetch('/me/sendMail', {
-      method: 'POST',
-      body: JSON.stringify({
-        message: { subject, body: { contentType: 'Text', content: bodyLines }, toRecipients },
-        saveToSentItems: false
-      })
-    });
+      '<a href="' + escapeHtml(APP_URL) + '">Open the AP Request System</a> and go to the Finance Queue tab to review and process this request.'
+    ].filter(line => line !== '');
+    await sendGraphMail(financeMembers.map(m => m.email), subject, lines);
   } catch (e) {
     // Non-fatal — the approval itself already succeeded; just flag that the email didn't go out.
     showToast('Request approved, but the Finance notification email could not be sent: ' + e.message, 'error');
@@ -1812,10 +1898,34 @@ async function handleFinanceDecision(decision){
       historyLog: appendHistory(record.historyLog, currentAccount.username + ' (Finance) ' + historyVerb[decision] + (comment ? ' Comment: ' + comment : '') + (paymentRef ? ' Payment ref: ' + paymentRef : ''))
     };
     await updateRequestItem(record.id, patch);
+    if (decision === 'info') {
+      await notifyRequestorOfInfoRequest(Object.assign({}, record, patch), comment);
+    }
     showToast(decision === 'info' ? 'Sent back to the requestor for more information.' : 'Finance decision recorded.', 'success');
     closeModal();
     await refreshAll();
   } catch (e) { showToast('Could not record Finance decision: ' + e.message, 'error'); }
+}
+async function notifyRequestorOfInfoRequest(record, comment){
+  if (!record.requestorEmail) return;
+  try {
+    const subject = '[AP Request] ' + record.requestId + ' — Finance needs more information';
+    const lines = [
+      'Finance needs more information before request ' + escapeHtml(record.requestId) + ' can be processed.',
+      '',
+      'Department: ' + escapeHtml(record.department),
+      'Vendor: ' + escapeHtml(record.vendorName),
+      'Amount: ' + escapeHtml(fmtAmount(record.amount, record.currency)),
+      '',
+      '<strong>Finance\'s comment:</strong> ' + escapeHtml(comment || '—'),
+      '',
+      '<a href="' + escapeHtml(APP_URL) + '">Open the AP Request System</a>, go to My Requests, and open this request to reply with the additional information.'
+    ].filter(line => line !== '');
+    await sendGraphMail([record.requestorEmail], subject, lines);
+  } catch (e) {
+    // Non-fatal — the Finance decision itself already succeeded; just flag that the email didn't go out.
+    showToast('Sent back to the requestor, but the notification email could not be sent: ' + e.message, 'error');
+  }
 }
 async function handleResubmitInfo(itemId){
   const record = findRecord(itemId);
@@ -1878,6 +1988,32 @@ document.getElementById('signout-btn').addEventListener('click', async () => {
   await msalReady;
   msalInstance.logoutRedirect({ account: currentAccount });
 });
+
+/* ---------------------------------------------------------------------
+   Theme (light/dark)
+   --------------------------------------------------------------------- */
+function applyTheme(theme){
+  document.documentElement.setAttribute('data-theme', theme);
+  const btn = document.getElementById('theme-toggle-btn');
+  if (btn) btn.textContent = theme === 'dark' ? 'Light mode' : 'Dark mode';
+  try { localStorage.setItem('ap-theme', theme); } catch (e) { /* private browsing, etc — theme just won't persist */ }
+}
+function initTheme(){
+  let theme = 'light';
+  let saved = null;
+  try { saved = localStorage.getItem('ap-theme'); } catch (e) { /* ignore */ }
+  if (saved === 'dark' || saved === 'light') {
+    theme = saved;
+  } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+    theme = 'dark';
+  }
+  applyTheme(theme);
+}
+document.getElementById('theme-toggle-btn').addEventListener('click', () => {
+  const current = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+  applyTheme(current === 'dark' ? 'light' : 'dark');
+});
+initTheme();
 
 (async function init(){
   await msalReady;
