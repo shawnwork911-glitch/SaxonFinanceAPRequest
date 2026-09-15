@@ -987,13 +987,20 @@ function renderAdminTab(){
 
 /* ---- record <-> SharePoint fields conversion ---- */
 function recordToFields(record, colMap){
+  // Every column on the "Finance AP Record" list is Single/Multiple lines of text —
+  // Graph's SharePoint connector can throw a generalException 500 if it gets a raw
+  // JSON number or boolean instead of a string for a Text column, so every value
+  // written here must be a plain string.
   const fields = {};
   Object.keys(DATA_FIELD_MAP).forEach(display => {
     const key = DATA_FIELD_MAP[display];
     const internal = colMap[display];
     if (!internal) return; // column missing on the list — skip silently
     if (record[key] === undefined) return;
-    fields[internal] = record[key];
+    let value = record[key];
+    if (key === 'isUrgent') value = value ? 'Yes' : 'No';
+    else if (typeof value === 'number' || typeof value === 'boolean') value = String(value);
+    fields[internal] = value;
   });
   return fields;
 }
@@ -1002,7 +1009,9 @@ function itemToRecord(item, colMap){
   Object.keys(DATA_FIELD_MAP).forEach(display => {
     const key = DATA_FIELD_MAP[display];
     const internal = colMap[display];
-    rec[key] = internal ? (item.fields[internal] ?? '') : '';
+    let value = internal ? (item.fields[internal] ?? '') : '';
+    if (key === 'isUrgent') value = (value === 'Yes' || value === true || value === 'true');
+    rec[key] = value;
   });
   return rec;
 }
