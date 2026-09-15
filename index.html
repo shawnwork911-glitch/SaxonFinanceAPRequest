@@ -351,7 +351,8 @@
           <label class="field-label">Requesting Department <span class="req">*</span></label>
           <select class="text-field" id="f-department">
             <option value="">— choose —</option>
-            <option value="Marketing">Marketing</option>
+            <option value="Digital Growth &amp; Branding">Digital Growth &amp; Branding</option>
+            <option value="Strategic Partnerships &amp; Events">Strategic Partnerships &amp; Events</option>
             <option value="Operations">Operations</option>
             <option value="HR Admin">HR Admin</option>
           </select>
@@ -452,7 +453,8 @@
         <div class="filters">
           <select class="filter-select" id="approvals-dept-filter" onchange="renderApprovalsTable()">
             <option value="">All departments</option>
-            <option value="Marketing">Marketing</option>
+            <option value="Digital Growth &amp; Branding">Digital Growth &amp; Branding</option>
+            <option value="Strategic Partnerships &amp; Events">Strategic Partnerships &amp; Events</option>
             <option value="Operations">Operations</option>
             <option value="HR Admin">HR Admin</option>
           </select>
@@ -481,7 +483,8 @@
         <div class="filters">
           <select class="filter-select" id="finance-dept-filter" onchange="renderFinanceTable()">
             <option value="">All departments</option>
-            <option value="Marketing">Marketing</option>
+            <option value="Digital Growth &amp; Branding">Digital Growth &amp; Branding</option>
+            <option value="Strategic Partnerships &amp; Events">Strategic Partnerships &amp; Events</option>
             <option value="Operations">Operations</option>
             <option value="HR Admin">HR Admin</option>
           </select>
@@ -513,7 +516,8 @@
         <div class="filters">
           <select class="filter-select" id="analytics-dept-filter" onchange="renderAnalyticsAll()">
             <option value="">All departments</option>
-            <option value="Marketing">Marketing</option>
+            <option value="Digital Growth &amp; Branding">Digital Growth &amp; Branding</option>
+            <option value="Strategic Partnerships &amp; Events">Strategic Partnerships &amp; Events</option>
             <option value="Operations">Operations</option>
             <option value="HR Admin">HR Admin</option>
           </select>
@@ -546,7 +550,7 @@
   <div class="view" id="view-admin">
     <div class="card" id="admin-list-warning" style="display:none; border-left: 3px solid var(--warn); background: var(--warn-bg);">
       <strong>The "AP System Roles" list wasn't found on this site.</strong>
-      <div class="field-hint" style="margin-top:6px;">Create a SharePoint list named exactly <code>AP System Roles</code> on the same site as your requests list, with columns: <code>RoleType</code> (Choice: "Department Approver", "Finance Team", "Urgent Payment Approver", "Requester Department"), <code>Department</code> (Choice: Marketing/Operations/HR Admin — leave blank for Finance Team and Urgent Payment Approver rows), <code>Email</code> (Single line of text). Then click Recheck below.</div>
+      <div class="field-hint" style="margin-top:6px;">Create a SharePoint list named exactly <code>AP System Roles</code> on the same site as your requests list, with columns: <code>RoleType</code> (Choice: "Department Approver", "Finance Team", "Urgent Payment Approver", "Requester Department"), <code>Department</code> (Choice: Digital Growth &amp; Branding/Strategic Partnerships &amp; Events/Operations/HR Admin — leave blank for Finance Team and Urgent Payment Approver rows), <code>Email</code> (Single line of text). Then click Recheck below.</div>
       <div class="btn-row" style="justify-content:flex-start; margin-top:10px;">
         <button type="button" class="btn btn-ghost" onclick="recheckRolesList()">Recheck</button>
       </div>
@@ -661,7 +665,8 @@ const SP_ROLES_LIST_NAME = "AP System Roles";            // second SharePoint li
    truth and these are ignored. Department keys here also define which
    departments the whole app offers. */
 const DEPARTMENTS = {
-  "Marketing":  { approverEmail: "marketing.approver@saxonrenewables.com" },
+  "Digital Growth & Branding":       { approverEmail: "marketing.approver@saxonrenewables.com" },
+  "Strategic Partnerships & Events": { approverEmail: "marketing.approver@saxonrenewables.com" },
   "Operations": { approverEmail: "operations.approver@saxonrenewables.com" },
   "HR Admin":   { approverEmail: "hr.approver@saxonrenewables.com" }
 };
@@ -740,7 +745,7 @@ const newRequestFiles = []; // File objects staged for the New Request form
    FINANCE_TEAM constants above until that list has rows. */
 let rolesListId = null;
 let rolesColumnMapCache = null;
-let deptApproverMap = {};  // { "Marketing": { itemId, email }, ... }
+let deptApproverMap = {};  // { "Digital Growth & Branding": { itemId, email }, ... }
 let financeMembers = [];   // [{ itemId, email }, ...]
 let urgentApproverEmail = ''; // single email — routes Urgent Payment requests, bypassing the dept approver
 let urgentApproverItemId = null;
