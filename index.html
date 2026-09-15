@@ -62,14 +62,19 @@
   .muted { color: var(--sub); }
   .small { font-size: 12.5px; }
 
-  /* ---- Theme toggle ---- */
+  /* ---- Theme toggle ----
+     Floats over the login screen (top-bar is hidden pre-sign-in), then gets moved into
+     #user-box, next to Sign out, once signed in — see showSignedInUI(). */
   #theme-toggle-btn {
-    position: fixed; top: 14px; right: 16px; z-index: 310;
     font-size: 12.5px; font-weight: 600; background: var(--panel); color: var(--sub);
     border: 1px solid var(--line); border-radius: 6px; padding: 7px 13px; cursor: pointer;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    flex-shrink: 0;
   }
   #theme-toggle-btn:hover { background: var(--paper); }
+  #theme-toggle-btn.theme-toggle-floating {
+    position: fixed; top: 14px; right: 16px; z-index: 310;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  }
 
   /* ---- Top bar / auth ---- */
   #login-overlay {
@@ -293,7 +298,7 @@
 </head>
 <body>
 
-<button type="button" id="theme-toggle-btn" title="Toggle dark / light mode">Dark mode</button>
+<button type="button" id="theme-toggle-btn" class="theme-toggle-floating" title="Toggle dark / light mode">Dark mode</button>
 
 <div id="login-overlay">
   <div id="login-card">
@@ -1177,7 +1182,9 @@ function statusPill(status){
   return '<span class="status-pill ' + cls + '">' + escapeHtml(status || STATUS.DRAFT) + '</span>';
 }
 function urgentTag(record){
-  return record.isUrgent ? ' <span class="status-pill" style="background:var(--bad-bg); color:var(--bad); margin-left:4px;">URGENT</span>' : '';
+  // Solid fill (not the usual bg/fg pill pair) so it stays a visible chip against the
+  // red-tinted row highlight urgent rows also get — a --bad-bg badge would blend into it.
+  return record.isUrgent ? ' <span class="status-pill" style="background:var(--bad); color:#fff; margin-left:4px;">URGENT</span>' : '';
 }
 function urgentRowAttr(record){
   return record.isUrgent ? ' class="row-urgent"' : '';
@@ -1619,7 +1626,7 @@ function docLinksHtml(record){
 function baseDetailGrid(record){
   let urgentRow;
   if (record.isUrgent) {
-    urgentRow = '<div><div class="k">Urgent payment</div><span class="status-pill" style="background:var(--bad-bg); color:var(--bad);">URGENT</span></div>';
+    urgentRow = '<div><div class="k">Urgent payment</div><span class="status-pill" style="background:var(--bad); color:#fff;">URGENT</span></div>';
   } else if (record.urgentJustification) {
     urgentRow = '<div><div class="k">Urgent payment</div><span class="status-pill" style="background:var(--line); color:var(--sub);">Was urgent — downgraded to normal flow</span></div>';
   } else {
@@ -1953,6 +1960,13 @@ async function showSignedInUI(){
   document.getElementById('top-bar').style.display = 'flex';
   document.getElementById('tabs').style.display = 'flex';
   document.getElementById('user-email-label').textContent = currentAccount.username;
+  // Move the theme toggle out of its floating login-screen position and into the top bar,
+  // next to Sign out, so it stops overlapping other controls once signed in.
+  const themeBtn = document.getElementById('theme-toggle-btn');
+  if (themeBtn && themeBtn.classList.contains('theme-toggle-floating')) {
+    themeBtn.classList.remove('theme-toggle-floating');
+    document.getElementById('user-box').insertBefore(themeBtn, document.getElementById('signout-btn'));
+  }
   document.getElementById('app-loading').style.display = 'block';
   try {
     await resolveSiteAndList();
