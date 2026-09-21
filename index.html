@@ -1210,6 +1210,13 @@ function fmtDateTime(v){
   if (isNaN(d)) return v;
   return d.toLocaleString('en-SG', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
+function toDateInputValue(v){
+  if (!v) return '';
+  const d = new Date(v);
+  if (isNaN(d)) return '';
+  const pad = n => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+}
 function fmtAmount(amount, currency){
   const n = Number(amount || 0);
   return (currency || '') + ' ' + n.toLocaleString('en-SG', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -1713,15 +1720,168 @@ function historyHtml(record){
   return '<hr class="section-divider"><div class="k" style="margin-bottom:6px;">History</div><div class="history-log">' + escapeHtml(record.historyLog || '—') + '</div>';
 }
 
+/* ---------------------------------------------------------------------
+   Edit-draft form (lets a requester amend a saved draft in place,
+   instead of having to delete it and start over on the New Request tab)
+   --------------------------------------------------------------------- */
+function departmentOptionsHtml(selected){
+  return '<option value="">— choose —</option>' + Object.keys(DEPARTMENTS).map(d =>
+    '<option value="' + escapeHtml(d) + '"' + (d === selected ? ' selected' : '') + '>' + escapeHtml(d) + '</option>'
+  ).join('');
+}
+function currencyOptionsHtml(selected){
+  return ['SGD','MYR','EUR','USD'].map(c =>
+    '<option value="' + c + '"' + (c === selected ? ' selected' : '') + '>' + c + '</option>'
+  ).join('');
+}
+function renderEditDocListInner(){
+  const docs = modalContext.editDocs || [];
+  if (!docs.length) return '<span class="muted small">No documents attached.</span>';
+  return docs.map((d, i) =>
+    '<div class="file-chip"><a href="' + d.url + '" target="_blank" rel="noopener">' + escapeHtml(d.name) + '</a>' +
+    '<span class="rm" onclick="removeEditDoc(' + i + ')">Remove</span></div>'
+  ).join('');
+}
+function renderEditDocChips(){
+  const el = document.getElementById('edit-existing-doc-list');
+  if (el) el.innerHTML = renderEditDocListInner();
+}
+function removeEditDoc(i){
+  modalContext.editDocs.splice(i, 1);
+  renderEditDocChips();
+}
+function renderEditNewFileChipsInner(){
+  const files = modalContext.editFiles || [];
+  return files.map((f, i) =>
+    '<div class="file-chip"><span>' + escapeHtml(f.name) + '</span><span class="rm" onclick="removeEditNewFile(' + i + ')">Remove</span></div>'
+  ).join('');
+}
+function renderEditNewFileChips(){
+  const el = document.getElementById('edit-new-file-chip-list');
+  if (el) el.innerHTML = renderEditNewFileChipsInner();
+}
+function handleEditFileSelect(e){
+  for (const f of e.target.files) modalContext.editFiles.push(f);
+  e.target.value = '';
+  renderEditNewFileChips();
+}
+function removeEditNewFile(i){
+  modalContext.editFiles.splice(i, 1);
+  renderEditNewFileChips();
+}
+function toggleEditUrgentJustification(){
+  const checked = document.getElementById('ed-urgent').checked;
+  document.getElementById('edit-urgent-justification-row').style.display = checked ? '' : 'none';
+}
+function renderEditDraftForm(record){
+  // Fresh edit state each time the modal is (re)opened on this record —
+  // editDocs starts as a copy of what's saved so removals don't touch the
+  // server until Save/Submit is clicked; editFiles holds newly-picked files
+  // that haven't been uploaded yet.
+  modalContext.editDocs = parseDocLinks(record.documentLinks).slice();
+  modalContext.editFiles = [];
+  const urgentChecked = !!record.isUrgent;
+  return '' +
+    '<div class="field-hint" style="margin-bottom:12px;">This request is still a draft — make any changes below, then save your progress or submit it for approval.</div>' +
+    '<div class="grid-2">' +
+      '<div class="field-row"><label class="field-label">Requesting Department <span class="req">*</span></label>' +
+        '<select class="text-field" id="ed-department">' + departmentOptionsHtml(record.department) + '</select></div>' +
+      '<div class="field-row"><label class="field-label">Vendor Name <span class="req">*</span></label>' +
+        '<input class="text-field" type="text" id="ed-vendor" value="' + escapeHtml(record.vendorName) + '"></div>' +
+      '<div class="field-row"><label class="field-label">Document Number</label>' +
+        '<input class="text-field" type="text" id="ed-invoice-number" value="' + escapeHtml(record.invoiceNumber) + '"></div>' +
+      '<div class="field-row"><label class="field-label">Payment Terms <span class="req">*</span></label>' +
+        '<input class="text-field" type="text" id="ed-payment-terms" value="' + escapeHtml(record.paymentTerms) + '"></div>' +
+      '<div class="field-row"><label class="field-label">Document Date</label>' +
+        '<input class="text-field" type="date" id="ed-invoice-date" value="' + toDateInputValue(record.invoiceDate) + '"></div>' +
+      '<div class="field-row"><label class="field-label">Amount <span class="req">*</span></label>' +
+        '<input class="text-field" type="number" step="0.01" min="0" id="ed-amount" value="' + (record.amount || '') + '"></div>' +
+      '<div class="field-row"><label class="field-label">Currency <span class="req">*</span></label>' +
+        '<select class="text-field" id="ed-currency">' + currencyOptionsHtml(record.currency) + '</select></div>' +
+    '</div>' +
+    '<div class="field-row" style="margin-top:14px; display:flex; align-items:center; gap:8px;">' +
+      '<input type="checkbox" id="ed-urgent" onchange="toggleEditUrgentJustification()"' + (urgentChecked ? ' checked' : '') + ' style="width:16px; height:16px;">' +
+      '<label class="field-label" for="ed-urgent" style="margin:0; cursor:pointer;">Urgent Payment</label>' +
+    '</div>' +
+    '<div class="field-row" id="edit-urgent-justification-row" style="display:' + (urgentChecked ? '' : 'none') + '; margin-top:8px;">' +
+      '<label class="field-label">Justification for urgent payment <span class="req">*</span></label>' +
+      '<textarea class="text-field" id="ed-urgent-justification">' + escapeHtml(record.urgentJustification) + '</textarea>' +
+      '<div class="field-hint">This request will skip your department approver entirely and route straight to the designated urgent-payment approver, then on to Finance as usual.</div>' +
+    '</div>' +
+    '<div class="field-row" style="margin-top:10px;"><label class="field-label">Description / Purpose <span class="req">*</span></label>' +
+      '<textarea class="text-field" id="ed-description">' + escapeHtml(record.description) + '</textarea></div>' +
+    '<div class="field-row" style="margin-top:10px;">' +
+      '<label class="field-label">Supporting Documents <span class="req">*</span></label>' +
+      '<div id="edit-existing-doc-list" class="doc-link-list" style="margin-bottom:8px;">' + renderEditDocListInner() + '</div>' +
+      '<input type="file" id="ed-files" multiple onchange="handleEditFileSelect(event)">' +
+      '<div class="field-hint">Newly attached files upload to the department\'s SharePoint folder when you save or submit.</div>' +
+      '<div class="file-chip-list" id="edit-new-file-chip-list">' + renderEditNewFileChipsInner() + '</div>' +
+    '</div>';
+}
+function readEditDraftForm(){
+  return {
+    department: document.getElementById('ed-department').value,
+    vendorName: document.getElementById('ed-vendor').value.trim(),
+    invoiceNumber: document.getElementById('ed-invoice-number').value.trim(),
+    paymentTerms: document.getElementById('ed-payment-terms').value.trim(),
+    invoiceDate: document.getElementById('ed-invoice-date').value ? new Date(document.getElementById('ed-invoice-date').value).toISOString() : '',
+    amount: parseFloat(document.getElementById('ed-amount').value || '0'),
+    currency: document.getElementById('ed-currency').value,
+    description: document.getElementById('ed-description').value.trim(),
+    isUrgent: document.getElementById('ed-urgent').checked,
+    urgentJustification: document.getElementById('ed-urgent-justification').value.trim()
+  };
+}
+function validateEditDraftForm(form){
+  if (!form.department) return 'Please choose a requesting department.';
+  if (!form.vendorName) return 'Please enter the vendor name.';
+  if (!form.paymentTerms) return 'Please enter the payment terms.';
+  if (!form.currency) return 'Please select a currency.';
+  if (!form.amount || form.amount <= 0) return 'Please enter an amount greater than zero.';
+  if (!form.description) return 'Please describe the purpose of this request.';
+  const docCount = (modalContext.editDocs || []).length + (modalContext.editFiles || []).length;
+  if (!docCount) return 'Please attach at least one supporting document.';
+  if (form.isUrgent && !form.urgentJustification) return 'Please provide a justification for the urgent payment.';
+  if (form.isUrgent && !urgentApproverEmail) return 'No Urgent Payment Approver has been configured yet. Contact an admin (User Management tab) before submitting an urgent request.';
+  return null;
+}
+async function handleSaveDraftEdits(itemId){
+  const record = findRecord(itemId);
+  if (!record) return;
+  const btn = document.getElementById('btn-save-draft-edits');
+  const form = readEditDraftForm();
+  if (!form.department) { showToast('Please choose a department before saving.', 'error'); return; }
+  setBusy(btn, true, 'Saving…');
+  try {
+    const newDocs = modalContext.editFiles.length ? await uploadFilesForRequest(form.department, record.requestId, modalContext.editFiles) : [];
+    const combinedDocs = (modalContext.editDocs || []).concat(newDocs);
+    const approverEmail = form.isUrgent ? (urgentApproverEmail || '') : ((deptApproverMap[form.department] || {}).email || '');
+    const patch = Object.assign({}, form, {
+      title: form.vendorName,
+      documentLinks: JSON.stringify(combinedDocs),
+      approverEmail,
+      historyLog: appendHistory(record.historyLog, currentAccount.username + ' updated this draft.')
+    });
+    await updateRequestItem(itemId, patch);
+    showToast('Draft updated.', 'success');
+    await refreshAll();
+    openDetail(itemId, 'edit-draft');
+  } catch (e) { showToast('Could not save changes: ' + e.message, 'error'); }
+  setBusy(btn, false);
+}
+
 function renderModalBody(record, mode){
+  if (mode === 'edit-draft') {
+    return renderEditDraftForm(record) + historyHtml(record) +
+      '<hr class="section-divider"><div class="btn-row">' +
+        '<button type="button" class="btn btn-danger" onclick="deleteDraft(\'' + record.id + '\')">Delete draft</button>' +
+        '<button type="button" class="btn btn-ghost" id="btn-save-draft-edits" onclick="handleSaveDraftEdits(\'' + record.id + '\')">Save changes</button>' +
+        '<button type="button" class="btn btn-primary" id="btn-submit-draft" onclick="handleSubmitDraft(\'' + record.id + '\')">Submit for approval</button>' +
+      '</div>';
+  }
+
   let html = baseDetailGrid(record) + approvalFinanceSummary(record) + historyHtml(record);
 
-  if (mode === 'edit-draft') {
-    html += '<hr class="section-divider"><div class="btn-row">' +
-      '<button type="button" class="btn btn-danger" onclick="deleteDraft(\'' + record.id + '\')">Delete draft</button>' +
-      '<button type="button" class="btn btn-primary" onclick="handleSubmitDraft(\'' + record.id + '\')">Submit for approval</button></div>' +
-      '<div class="field-hint" style="margin-top:6px;">To change details before submitting, delete this draft and re-enter it on the New Request tab.</div>';
-  }
   if (mode === 'approve') {
     html += '<hr class="section-divider">' +
       (record.isUrgent ? '<div class="field-hint" style="margin-bottom:10px;">This request was marked <strong>Urgent Payment</strong> and routed directly to you, bypassing the ' + escapeHtml(record.department) + ' department approver.</div>' : '') +
@@ -1759,26 +1919,26 @@ function renderModalBody(record, mode){
 async function handleSubmitDraft(itemId){
   const record = findRecord(itemId);
   if (!record) return;
-  const draftDocs = parseDocLinks(record.documentLinks);
-  if (!record.amount || !record.description || !record.paymentTerms || !record.currency || !draftDocs.length) {
-    showToast('This draft is missing required fields (payment terms, currency, amount, description or supporting documents) — delete it and re-enter it on the New Request tab.', 'error');
-    return;
-  }
-  if (record.isUrgent && !urgentApproverEmail) {
-    showToast('No Urgent Payment Approver has been configured yet. Contact an admin (User Management tab) before submitting this urgent draft.', 'error');
-    return;
-  }
+  const form = readEditDraftForm();
+  const err = validateEditDraftForm(form);
+  if (err) { showToast(err, 'error'); return; }
+  const btn = document.getElementById('btn-submit-draft');
+  setBusy(btn, true, 'Submitting…');
   try {
-    const approverEmail = record.isUrgent ? urgentApproverEmail : ((deptApproverMap[record.department] || {}).email || '');
-    const historyMsg = record.isUrgent
-      ? currentAccount.username + ' submitted this URGENT PAYMENT draft for approval — routed directly to the urgent approver (' + approverEmail + '), bypassing the ' + record.department + ' department approver.'
-      : currentAccount.username + ' submitted this draft for approval (' + record.department + ').';
-    const patch = {
+    const newDocs = modalContext.editFiles.length ? await uploadFilesForRequest(form.department, record.requestId, modalContext.editFiles) : [];
+    const combinedDocs = (modalContext.editDocs || []).concat(newDocs);
+    const approverEmail = form.isUrgent ? urgentApproverEmail : ((deptApproverMap[form.department] || {}).email || '');
+    const historyMsg = form.isUrgent
+      ? currentAccount.username + ' submitted this URGENT PAYMENT draft for approval — routed directly to the urgent approver (' + approverEmail + '), bypassing the ' + form.department + ' department approver.'
+      : currentAccount.username + ' submitted this draft for approval (' + form.department + ').';
+    const patch = Object.assign({}, form, {
+      title: form.vendorName,
+      documentLinks: JSON.stringify(combinedDocs),
       status: STATUS.PENDING_APPROVAL,
       approverEmail,
       submittedDate: nowIso(),
       historyLog: appendHistory(record.historyLog, historyMsg)
-    };
+    });
     await updateRequestItem(itemId, patch);
     await notifyApproverOfNewRequest(Object.assign({}, record, patch));
     showToast('Request ' + record.requestId + ' submitted for approval.', 'success');
@@ -1786,6 +1946,7 @@ async function handleSubmitDraft(itemId){
     await refreshAll();
     switchTab('mine');
   } catch (e) { showToast('Could not submit draft: ' + e.message, 'error'); }
+  setBusy(btn, false);
 }
 async function deleteDraft(itemId){
   if (!confirm('Delete this draft? This cannot be undone.')) return;
