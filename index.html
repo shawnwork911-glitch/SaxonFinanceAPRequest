@@ -1667,6 +1667,7 @@ function findRecord(id){ return allItemsCache.find(r => r.id === id); }
 function openDetail(id, mode){
   const record = findRecord(id);
   if (!record) return;
+  if (mode === 'edit-submitted' && !canEditSubmitted(record)) mode = 'mine';
   modalContext = { record, mode };
   document.getElementById('modal-title').textContent = record.requestId + ' — ' + record.vendorName;
   document.getElementById('modal-body').innerHTML = renderModalBody(record, mode);
@@ -1784,7 +1785,7 @@ function toggleEditUrgentJustification(){
   const checked = document.getElementById('ed-urgent').checked;
   document.getElementById('edit-urgent-justification-row').style.display = checked ? '' : 'none';
 }
-function renderEditDraftForm(record){
+function renderEditDraftForm(record, introHtml){
   // Fresh edit state each time the modal is (re)opened on this record —
   // editDocs starts as a copy of what's saved so removals don't touch the
   // server until Save/Submit is clicked; editFiles holds newly-picked files
@@ -1793,7 +1794,7 @@ function renderEditDraftForm(record){
   modalContext.editFiles = [];
   const urgentChecked = !!record.isUrgent;
   return '' +
-    '<div class="field-hint" style="margin-bottom:12px;">This request is still a draft — make any changes below, then save your progress or submit it for approval.</div>' +
+    (introHtml || '<div class="field-hint" style="margin-bottom:12px;">This request is still a draft — make any changes below, then save your progress or submit it for approval.</div>') +
     '<div class="grid-2">' +
       '<div class="field-row"><label class="field-label">Requesting Department <span class="req">*</span></label>' +
         '<select class="text-field" id="ed-department">' + departmentOptionsHtml(record.department) + '</select></div>' +
@@ -1891,6 +1892,20 @@ function renderModalBody(record, mode){
       '</div>';
   }
 
+  if (mode === 'edit-submitted') {
+    const stageNote = record.status === STATUS.PENDING_FINANCE
+      ? 'This request has already been approved by <strong>' + escapeHtml(record.approverEmail || 'the approver') + '</strong> and is waiting for Finance review.'
+      : 'This request is currently waiting for approval from <strong>' + escapeHtml(record.approverEmail || 'the approver') + '</strong>.';
+    const intro = '<div class="field-hint" style="margin-bottom:12px; padding:10px 12px; border-radius:8px; background:var(--warn-bg); color:var(--warn);">' +
+      stageNote + ' Saving your changes will <strong>withdraw it from its current step and restart the full approval process</strong> — it goes back to the ' +
+      'department approver (or the Urgent Payment Approver if ticked), then on to Finance. Any existing approval will be cleared.</div>';
+    return renderEditDraftForm(record, intro) + historyHtml(record) +
+      '<hr class="section-divider"><div class="btn-row">' +
+        '<button type="button" class="btn btn-ghost" onclick="openDetail(\'' + record.id + '\',\'mine\')">Cancel</button>' +
+        '<button type="button" class="btn btn-primary" id="btn-resubmit-edits" onclick="handleResubmitEdits(\'' + record.id + '\')">Save changes &amp; resubmit for approval</button>' +
+      '</div>';
+  }
+
   let html = baseDetailGrid(record) + approvalFinanceSummary(record) + historyHtml(record);
 
   if (mode === 'approve') {
@@ -1913,6 +1928,13 @@ function renderModalBody(record, mode){
         '<button type="button" class="btn btn-info" onclick="handleFinanceDecision(\'info\')">Request more info</button>' +
         '<button type="button" class="btn btn-gold" onclick="handleFinanceDecision(\'process\')">Mark as processed / paid</button>' +
       '</div>';
+  }
+  if (mode === 'mine' && canEditSubmitted(record)) {
+    html += '<hr class="section-divider">' +
+      '<div class="field-hint" style="margin-bottom:8px;">Need to correct something? You can edit the details and attachments while this request is ' +
+      (record.status === STATUS.PENDING_FINANCE ? 'waiting for Finance review' : 'waiting for approval') +
+      ' — note that it will restart the whole approval process.</div>' +
+      '<div class="btn-row"><button type="button" class="btn btn-primary" onclick="openDetail(\'' + record.id + '\',\'edit-submitted\')">Edit request</button></div>';
   }
   if (mode === 'mine' && record.status === STATUS.REJECTED_APPROVER && record.requestorEmail.toLowerCase() === myEmail()) {
     html += '<hr class="section-divider"><div class="field-hint">This request was rejected by your department approver. Submit a new request if you would like to resend it, using the approver comments above to make corrections.</div>';
@@ -1967,6 +1989,114 @@ async function deleteDraft(itemId){
     closeModal();
     await refreshAll();
   } catch (e) { showToast('Could not delete draft: ' + e.message, 'error'); }
+}
+
+/* ---------------------------------------------------------------------
+   Editing a submitted request
+   The requestor can amend details and attachments while the request is
+   Pending Approval or Approved – Pending Finance. Saving always restarts
+   the full approval process: any prior approval is cleared and it goes
+   back to the department (or urgent) approver, then on to Finance.
+   --------------------------------------------------------------------- */
+const EDITABLE_AFTER_SUBMIT = [STATUS.PENDING_APPROVAL, STATUS.PENDING_FINANCE];
+function canEditSubmitted(record){
+  return !!record && EDITABLE_AFTER_SUBMIT.includes(record.status) &&
+    (record.requestorEmail || '').toLowerCase() === myEmail();
+}
+async function fetchCurrentRecord(itemId){
+  const colMap = await getColumnMap();
+  const item = await graphFetch("/sites/" + siteId + "/lists/" + listId + "/items/" + itemId + "?expand=fields");
+  return itemToRecord(item, colMap);
+}
+function describeEdits(before, form, docsBefore, docsAfter){
+  const labels = { department: 'Department', vendorName: 'Vendor', invoiceNumber: 'Document number', paymentTerms: 'Payment terms',
+    invoiceDate: 'Document date', amount: 'Amount', currency: 'Currency', description: 'Description', isUrgent: 'Urgent payment',
+    urgentJustification: 'Urgent justification' };
+  const changed = [];
+  Object.keys(labels).forEach(k => {
+    let a = before[k], b = form[k];
+    if (k === 'amount') { a = Number(a || 0); b = Number(b || 0); }
+    else if (k === 'invoiceDate') { a = toDateInputValue(a); b = toDateInputValue(b); }
+    else if (k === 'isUrgent') { a = !!a; b = !!b; }
+    else { a = (a || '').toString().trim(); b = (b || '').toString().trim(); }
+    if (a !== b) changed.push(labels[k]);
+  });
+  const urlsBefore = docsBefore.map(d => d.url), urlsAfter = docsAfter.map(d => d.url);
+  const added = docsAfter.filter(d => !urlsBefore.includes(d.url)).map(d => d.name);
+  const removed = docsBefore.filter(d => !urlsAfter.includes(d.url)).map(d => d.name);
+  if (added.length) changed.push('attachments added (' + added.join(', ') + ')');
+  if (removed.length) changed.push('attachments removed (' + removed.join(', ') + ')');
+  return changed.length ? changed.join('; ') : 'no field changes';
+}
+async function notifyFinanceOfWithdrawal(record, changeSummary){
+  if (!financeMembers.length) return;
+  try {
+    const subject = '[AP Request] ' + record.requestId + ' — withdrawn from Finance queue (edited by requestor)';
+    const lines = [
+      'Request ' + escapeHtml(record.requestId) + ' was edited by the requestor and has been withdrawn from the Finance queue.',
+      'It must go through department approval again before it returns to Finance — no action is needed from you right now.',
+      '',
+      'Department: ' + escapeHtml(record.department),
+      'Vendor: ' + escapeHtml(record.vendorName),
+      'Amount: ' + escapeHtml(fmtAmount(record.amount, record.currency)),
+      'Changes: ' + escapeHtml(changeSummary)
+    ];
+    await sendGraphMail(financeMembers.map(m => m.email), subject, lines);
+  } catch (e) {
+    showToast('Resubmitted, but the Finance withdrawal email could not be sent: ' + e.message, 'error');
+  }
+}
+async function handleResubmitEdits(itemId){
+  const record = findRecord(itemId);
+  if (!record) return;
+  const form = readEditDraftForm();
+  const err = validateEditDraftForm(form);
+  if (err) { showToast(err, 'error'); return; }
+  if (!confirm('Save your changes and restart the approval process? Any existing approval on this request will be cleared.')) return;
+  const btn = document.getElementById('btn-resubmit-edits');
+  setBusy(btn, true, 'Resubmitting…');
+  try {
+    // Re-read the live item so we don't overwrite a decision the approver / Finance
+    // made after this modal was opened (e.g. it was just rejected or processed).
+    const live = await fetchCurrentRecord(itemId);
+    if (!canEditSubmitted(live)) {
+      showToast('This request can no longer be edited — its status changed to "' + (live.status || 'unknown') + '". Your changes were not saved.', 'error');
+      setBusy(btn, false);
+      await refreshAll();
+      openDetail(itemId, 'mine');
+      return;
+    }
+    const docsBefore = parseDocLinks(live.documentLinks);
+    const newDocs = modalContext.editFiles.length ? await uploadFilesForRequest(form.department, live.requestId, modalContext.editFiles) : [];
+    const combinedDocs = (modalContext.editDocs || []).concat(newDocs);
+    const approverEmail = form.isUrgent ? urgentApproverEmail : ((deptApproverMap[form.department] || {}).email || '');
+    const changeSummary = describeEdits(live, form, docsBefore, combinedDocs);
+    const previousStage = live.status === STATUS.PENDING_FINANCE ? 'Finance review (already approved by ' + (live.approverEmail || 'approver') + ')' : 'department approval';
+    const historyMsg = currentAccount.username + ' edited the request while it was awaiting ' + previousStage + '. Changes: ' + changeSummary +
+      '. Approval process restarted — ' + (form.isUrgent
+        ? 'routed directly to the urgent approver (' + approverEmail + ').'
+        : 'routed to the ' + form.department + ' department approver (' + (approverEmail || 'none configured') + ').');
+    const patch = Object.assign({}, form, {
+      title: form.vendorName,
+      documentLinks: JSON.stringify(combinedDocs),
+      status: STATUS.PENDING_APPROVAL,
+      approverEmail,
+      submittedDate: nowIso(),
+      // Clear the previous approval / Finance outcome so the request is decided afresh.
+      approvalDecision: '', approvalDate: '', approvalComments: '',
+      financeReviewer: '', financeDecision: '', financeDecisionDate: '', financeComments: '', paymentReference: '',
+      historyLog: appendHistory(live.historyLog, historyMsg)
+    });
+    await updateRequestItem(itemId, patch);
+    const updated = Object.assign({}, live, patch);
+    await notifyApproverOfNewRequest(updated);
+    if (live.status === STATUS.PENDING_FINANCE) await notifyFinanceOfWithdrawal(updated, changeSummary);
+    showToast('Request ' + live.requestId + ' updated and resubmitted for approval.', 'success');
+    closeModal();
+    await refreshAll();
+    switchTab('mine');
+  } catch (e) { showToast('Could not resubmit request: ' + e.message, 'error'); }
+  setBusy(btn, false);
 }
 
 function handleRejectClick(){
