@@ -1133,7 +1133,11 @@ async function uploadOneFile(folderPath, file){
   const ext = dot > 0 ? safeName.slice(dot) : '';
   const stampedName = base + '_' + fileTimestampSuffix() + ext;
   const encodedPath = encodeURIComponent(folderPath + '/' + stampedName).replace(/%2F/g, '/');
-  const buf = await file.arrayBuffer();
+  let buf;
+  try { buf = await file.arrayBuffer(); }
+  catch (err) {
+    throw new Error('The attachment "' + file.name + '" could not be read — it may have been moved, renamed or deleted after you attached it. Remove it, then attach it again.');
+  }
   const item = await graphFetch(
     "/drives/" + docLibraryDriveId + "/root:/" + encodedPath + ":/content?@microsoft.graph.conflictBehavior=replace",
     { method: 'PUT', body: buf, headers: { 'Content-Type': file.type || 'application/octet-stream' } }
@@ -1272,9 +1276,30 @@ function setBusy(btn, busy, busyLabel){
 /* ---------------------------------------------------------------------
    New Request form
    --------------------------------------------------------------------- */
-document.getElementById('f-files').addEventListener('change', (e) => {
-  for (const f of e.target.files) newRequestFiles.push(f);
+/* Copy each picked file's bytes into memory the moment it's selected. A browser File is only
+   a pointer to the file on disk — if the original gets moved, renamed, deleted, or was a
+   temporary copy (e.g. opened straight from an Outlook/WhatsApp attachment or a zip), reading
+   it later at save time fails with "A requested file or directory could not be found…".
+   Snapshotting it here means the upload no longer depends on the original still existing. */
+async function snapshotFiles(fileList){
+  const out = [], failed = [];
+  for (const f of Array.from(fileList)) {
+    try {
+      const buf = await f.arrayBuffer();
+      out.push(new File([buf], f.name, { type: f.type, lastModified: f.lastModified }));
+    } catch (err) {
+      failed.push(f.name);
+    }
+  }
+  if (failed.length) {
+    showToast('Could not read: ' + failed.join(', ') + '. Save the file to a normal folder on your computer (e.g. Desktop), then attach it again.', 'error');
+  }
+  return out;
+}
+document.getElementById('f-files').addEventListener('change', async (e) => {
+  const picked = await snapshotFiles(e.target.files);
   e.target.value = '';
+  for (const f of picked) newRequestFiles.push(f);
   renderNewFileChips();
 });
 function renderNewFileChips(){
@@ -1772,9 +1797,10 @@ function renderEditNewFileChips(){
   const el = document.getElementById('edit-new-file-chip-list');
   if (el) el.innerHTML = renderEditNewFileChipsInner();
 }
-function handleEditFileSelect(e){
-  for (const f of e.target.files) modalContext.editFiles.push(f);
+async function handleEditFileSelect(e){
+  const picked = await snapshotFiles(e.target.files);
   e.target.value = '';
+  for (const f of picked) modalContext.editFiles.push(f);
   renderEditNewFileChips();
 }
 function removeEditNewFile(i){
