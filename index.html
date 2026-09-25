@@ -751,6 +751,7 @@ let allItemsCache = [];
 let currentView = 'new';
 let modalContext = null; // { record, mode }
 const newRequestFiles = []; // File objects staged for the New Request form
+let pendingNewRequestId = null; // kept across a failed save so a retry reuses the same folder
 
 /* Roles list (department approvers + Finance team), loaded from SharePoint
    at sign-in via loadRolesConfig(). Falls back to the DEPARTMENTS /
@@ -821,7 +822,21 @@ async function graphFetch(path, options){
     headers['Content-Type'] = headers['Content-Type'] || 'application/json';
   }
   const url = path.startsWith('http') ? path : 'https://graph.microsoft.com/v1.0' + path;
-  const res = await fetch(url, { method: options.method || 'GET', body: options.body, headers });
+  // SharePoint throttles bursts of requests (e.g. 20+ uploads in a row) with 429/503.
+  // Wait as long as it asks (Retry-After), then try again, instead of failing the whole save.
+  let res;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      res = await fetch(url, { method: options.method || 'GET', body: options.body, headers });
+    } catch (netErr) {
+      if (attempt >= 3) throw new Error('Network error — please check your connection and try again.');
+      await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
+      continue;
+    }
+    if (![429, 502, 503, 504].includes(res.status) || attempt >= 4) break;
+    const retryAfter = parseInt(res.headers.get('Retry-After'), 10);
+    await new Promise(r => setTimeout(r, (isNaN(retryAfter) ? 2 ** attempt * 2 : retryAfter) * 1000));
+  }
   if (res.ok) {
     if (res.status === 204) return null;
     const text = await res.text();
@@ -1123,7 +1138,7 @@ async function ensureFolderPath(fullPath){
     built = built ? built + '/' + seg : seg;
   }
 }
-async function uploadOneFile(folderPath, file){
+async function uploadOneFile(folderPath, file, dupIndex){
   if (!docLibraryDriveId) throw new Error('Could not find the "' + SP_DOC_LIBRARY_NAME + '" document library on this site.');
   const safeName = file.name.replace(/[#%*:<>?/\\{|}]/g, '_');
   // Keep the file's actual name, but stamp a timestamp behind it (before the extension) so
@@ -1131,7 +1146,9 @@ async function uploadOneFile(folderPath, file){
   const dot = safeName.lastIndexOf('.');
   const base = dot > 0 ? safeName.slice(0, dot) : safeName;
   const ext = dot > 0 ? safeName.slice(dot) : '';
-  const stampedName = base + '_' + fileTimestampSuffix() + ext;
+  // dupIndex keeps two attachments with the same name (e.g. two "invoice.pdf") from
+  // overwriting each other when they're uploaded within the same second.
+  const stampedName = base + '_' + fileTimestampSuffix() + (dupIndex ? '_' + (dupIndex + 1) : '') + ext;
   const encodedPath = encodeURIComponent(folderPath + '/' + stampedName).replace(/%2F/g, '/');
   let buf;
   try { buf = await file.arrayBuffer(); }
@@ -1162,14 +1179,61 @@ function getPeriodFolderName(date){
   }
   return '12th ' + monthNames[month] + ' ' + year;
 }
-async function uploadFilesForRequest(department, requestId, files){
+const MAX_FILE_BYTES = 250 * 1024 * 1024; // Graph's single-request upload limit
+const UPLOAD_CONCURRENCY = 3;              // a few at a time: faster than one-by-one, gentle enough to avoid throttling
+// Remembers which File objects already made it to SharePoint, so if a save fails part-way
+// through (say on file 17 of 20), clicking Save again only uploads the remaining files.
+const uploadedFileCache = new WeakMap();   // File -> { key, doc }
+async function uploadFilesForRequest(department, requestId, files, onProgress){
   if (!files.length) return [];
   const periodFolder = getPeriodFolderName();
   const folderPath = DOC_LIBRARY_ROOT + '/' + periodFolder + '/' + department + '/' + requestId;
-  await ensureFolderPath(folderPath);
-  const uploaded = [];
-  for (const f of files) uploaded.push(await uploadOneFile(folderPath, f));
-  return uploaded;
+  const cacheKey = folderPath;
+  const results = new Array(files.length);
+  const todo = [];
+  files.forEach((f, i) => {
+    const hit = uploadedFileCache.get(f);
+    if (hit && hit.key === cacheKey) results[i] = hit.doc; else todo.push(i);
+  });
+  let done = files.length - todo.length;
+  if (onProgress) onProgress(done, files.length);
+  if (todo.length) {
+    await ensureFolderPath(folderPath);
+    // Number repeated names so they get distinct file names in the folder
+    const seen = {};
+    const dupIndex = files.map(f => { const k = f.name.toLowerCase(); seen[k] = (seen[k] || 0) + 1; return seen[k] - 1; });
+    fileTimestampSuffix.fixedDate = new Date();
+    const failures = [];
+    let next = 0;
+    const worker = async () => {
+      while (next < todo.length) {
+        const i = todo[next++];
+        try {
+          const doc = await uploadOneFile(folderPath, files[i], dupIndex[i]);
+          results[i] = doc;
+          uploadedFileCache.set(files[i], { key: cacheKey, doc });
+        } catch (e) {
+          failures.push({ name: files[i].name, message: e.message });
+        }
+        done++;
+        if (onProgress) onProgress(done, files.length);
+      }
+    };
+    try {
+      await Promise.all(Array.from({ length: Math.min(UPLOAD_CONCURRENCY, todo.length) }, worker));
+    } finally {
+      fileTimestampSuffix.fixedDate = null;
+    }
+    if (failures.length) {
+      const okCount = files.length - failures.length;
+      throw new Error(failures.length + ' of ' + files.length + ' attachment(s) failed to upload (' +
+        failures.map(f => f.name).join(', ') + '). ' + okCount + ' uploaded fine and won\'t be uploaded again — click Save again to retry the rest. Detail: ' + failures[0].message);
+    }
+  }
+  return results;
+}
+function uploadProgressLabel(btn, verb){
+  return (done, total) => { if (btn && total > 1) btn.textContent = verb + ' ' + done + '/' + total + ' files…'; };
 }
 
 /* ---- List item CRUD ---- */
@@ -1209,7 +1273,7 @@ function genRequestId(){
 function nowIso(){ return new Date().toISOString(); }
 function fileTimestampSuffix(){
   // Compact, filename-safe local timestamp: YYYYMMDD-HHMMSS
-  const d = new Date();
+  const d = fileTimestampSuffix.fixedDate || new Date();
   const pad = n => String(n).padStart(2, '0');
   return d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + '-' + pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds());
 }
@@ -1267,8 +1331,11 @@ function showToast(message, kind){
   clearTimeout(showToast._t);
   showToast._t = setTimeout(() => { el.style.display = 'none'; }, 4200);
 }
+let busyCount = 0;
+window.addEventListener('beforeunload', (e) => { if (busyCount > 0) { e.preventDefault(); e.returnValue = ''; } });
 function setBusy(btn, busy, busyLabel){
   if (!btn) return;
+  busyCount = Math.max(0, busyCount + (busy ? 1 : -1));
   if (busy) { btn.dataset.origLabel = btn.textContent; btn.textContent = busyLabel || 'Working…'; btn.disabled = true; }
   else { btn.textContent = btn.dataset.origLabel || btn.textContent; btn.disabled = false; }
 }
@@ -1283,7 +1350,9 @@ function setBusy(btn, busy, busyLabel){
    Snapshotting it here means the upload no longer depends on the original still existing. */
 async function snapshotFiles(fileList){
   const out = [], failed = [];
+  const tooBig = [];
   for (const f of Array.from(fileList)) {
+    if (f.size > MAX_FILE_BYTES) { tooBig.push(f.name); continue; }
     try {
       const buf = await f.arrayBuffer();
       out.push(new File([buf], f.name, { type: f.type, lastModified: f.lastModified }));
@@ -1291,7 +1360,9 @@ async function snapshotFiles(fileList){
       failed.push(f.name);
     }
   }
-  if (failed.length) {
+  if (tooBig.length) {
+    showToast('Too large (over 250 MB): ' + tooBig.join(', ') + '. Please compress or split the file.', 'error');
+  } else if (failed.length) {
     showToast('Could not read: ' + failed.join(', ') + '. Save the file to a normal folder on your computer (e.g. Desktop), then attach it again.', 'error');
   }
   return out;
@@ -1322,6 +1393,7 @@ function clearNewRequestForm(){
   document.getElementById('f-urgent').checked = false;
   document.getElementById('urgent-justification-row').style.display = 'none';
   newRequestFiles.length = 0;
+  pendingNewRequestId = null;
   renderNewFileChips();
 }
 function readNewRequestForm(){
@@ -1356,8 +1428,9 @@ async function handleSaveDraft(){
   if (!form.department) { showToast('Please choose a department before saving.', 'error'); return; }
   setBusy(btn, true, 'Saving…');
   try {
-    const requestId = genRequestId();
-    const docs = await uploadFilesForRequest(form.department, requestId, newRequestFiles);
+    const requestId = pendingNewRequestId || (pendingNewRequestId = genRequestId());
+    const docs = await uploadFilesForRequest(form.department, requestId, newRequestFiles, uploadProgressLabel(btn, 'Uploading'));
+    btn.textContent = 'Saving…';
     const approverEmail = form.isUrgent ? (urgentApproverEmail || '') : ((deptApproverMap[form.department] || {}).email || '');
     const record = Object.assign({}, form, {
       title: form.vendorName, requestId,
@@ -1383,8 +1456,9 @@ async function handleSubmitRequest(){
   if (err) { showToast(err, 'error'); return; }
   setBusy(btn, true, 'Submitting…');
   try {
-    const requestId = genRequestId();
-    const docs = await uploadFilesForRequest(form.department, requestId, newRequestFiles);
+    const requestId = pendingNewRequestId || (pendingNewRequestId = genRequestId());
+    const docs = await uploadFilesForRequest(form.department, requestId, newRequestFiles, uploadProgressLabel(btn, 'Uploading'));
+    btn.textContent = 'Submitting…';
     const approverEmail = form.isUrgent ? urgentApproverEmail : ((deptApproverMap[form.department] || {}).email || '');
     const historyMsg = form.isUrgent
       ? currentAccount.username + ' submitted an URGENT PAYMENT request for approval — routed directly to the urgent approver (' + approverEmail + '), bypassing the ' + form.department + ' department approver.'
@@ -1891,7 +1965,7 @@ async function handleSaveDraftEdits(itemId){
   if (!form.department) { showToast('Please choose a department before saving.', 'error'); return; }
   setBusy(btn, true, 'Saving…');
   try {
-    const newDocs = modalContext.editFiles.length ? await uploadFilesForRequest(form.department, record.requestId, modalContext.editFiles) : [];
+    const newDocs = modalContext.editFiles.length ? await uploadFilesForRequest(form.department, record.requestId, modalContext.editFiles, uploadProgressLabel(btn, 'Uploading')) : [];
     const combinedDocs = (modalContext.editDocs || []).concat(newDocs);
     const approverEmail = form.isUrgent ? (urgentApproverEmail || '') : ((deptApproverMap[form.department] || {}).email || '');
     const patch = Object.assign({}, form, {
@@ -1984,7 +2058,7 @@ async function handleSubmitDraft(itemId){
   const btn = document.getElementById('btn-submit-draft');
   setBusy(btn, true, 'Submitting…');
   try {
-    const newDocs = modalContext.editFiles.length ? await uploadFilesForRequest(form.department, record.requestId, modalContext.editFiles) : [];
+    const newDocs = modalContext.editFiles.length ? await uploadFilesForRequest(form.department, record.requestId, modalContext.editFiles, uploadProgressLabel(btn, 'Uploading')) : [];
     const combinedDocs = (modalContext.editDocs || []).concat(newDocs);
     const approverEmail = form.isUrgent ? urgentApproverEmail : ((deptApproverMap[form.department] || {}).email || '');
     const historyMsg = form.isUrgent
@@ -2093,7 +2167,7 @@ async function handleResubmitEdits(itemId){
       return;
     }
     const docsBefore = parseDocLinks(live.documentLinks);
-    const newDocs = modalContext.editFiles.length ? await uploadFilesForRequest(form.department, live.requestId, modalContext.editFiles) : [];
+    const newDocs = modalContext.editFiles.length ? await uploadFilesForRequest(form.department, live.requestId, modalContext.editFiles, uploadProgressLabel(btn, 'Uploading')) : [];
     const combinedDocs = (modalContext.editDocs || []).concat(newDocs);
     const approverEmail = form.isUrgent ? urgentApproverEmail : ((deptApproverMap[form.department] || {}).email || '');
     const changeSummary = describeEdits(live, form, docsBefore, combinedDocs);
