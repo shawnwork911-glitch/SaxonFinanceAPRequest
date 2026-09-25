@@ -397,7 +397,8 @@
         </div>
         <div class="field-row">
           <label class="field-label">Payment Terms <span class="req">*</span></label>
-          <input class="text-field" type="text" id="f-payment-terms" placeholder="e.g. Net 30">
+          <select class="text-field" id="f-payment-terms"></select>
+          <div class="field-hint">Matches the payment terms codes in Business Central. Tip: click the list and type the code (e.g. INV30) to jump to it.</div>
         </div>
         <div class="field-row">
           <label class="field-label">Document Date</label>
@@ -702,6 +703,65 @@ const SP_LIST_NAME = "Finance AP Record";                // must match the Share
 const SP_DOC_LIBRARY_NAME = "Process Improvement";       // the document library (not the site's default "Documents") that holds the upload folder
 const DOC_LIBRARY_ROOT = "Finance Documents";            // folder inside that library — uploads land in DOC_LIBRARY_ROOT/PeriodFolder/Department/RequestID
 const GRAPH_SCOPES = ["Sites.ReadWrite.All", "User.Read", "Mail.Send"];
+/* Payment terms, copied from Business Central's Payment Terms table.
+   Requesters pick from this list so Finance gets the exact BC code.
+   To add/change a term: edit this list (keep the same { code, desc } shape). */
+const PAYMENT_TERM_GROUPS = [
+  { group: 'Calendar days', terms: [
+    { code: '03D', desc: '3 DAYS' }, { code: '05D', desc: '5 DAYS' }, { code: '07D', desc: '7 DAYS' },
+    { code: '10D', desc: '10 DAYS' }, { code: '14D', desc: '14 DAYS' }, { code: '15D', desc: '15 DAYS' },
+    { code: '17D', desc: '17 DAYS' }, { code: '20D', desc: '20 DAYS' }, { code: '21D', desc: '21 DAYS' },
+    { code: '28D', desc: '28 DAYS' }, { code: '30D', desc: '30 DAYS' }, { code: '42D', desc: '42 DAYS' },
+    { code: '45D', desc: '45 DAYS' }, { code: '60D', desc: '60 DAYS' }, { code: '90D', desc: '90 DAYS' } ] },
+  { group: 'Days after invoice date', terms: [
+    { code: 'INV3', desc: '3 DAYS AFTER INVOICE DATE' }, { code: 'INV5', desc: '5 DAYS AFTER INVOICE DATE' },
+    { code: 'INV7', desc: '7 DAYS AFTER INVOICE DATE' }, { code: 'INV10', desc: '10 DAYS AFTER INVOICE DATE' },
+    { code: 'INV14', desc: '14 DAYS AFTER INVOICE DATE' }, { code: 'INV15', desc: '15 DAYS AFTER INVOICE DATE' },
+    { code: 'INV20', desc: '20 DAYS AFTER INVOICE DATE' }, { code: 'INV21', desc: '21 DAYS AFTER INVOICE DATE' },
+    { code: 'INV30', desc: '30 DAYS AFTER INVOICE DATE' }, { code: 'INV45', desc: '45 DAYS AFTER INVOICE DATE' },
+    { code: 'INV60', desc: '60 DAYS AFTER INVOICE DATE' }, { code: 'INV90', desc: '90 DAYS AFTER INVOICE DATE' } ] },
+  { group: 'Business days after invoice date', terms: [
+    { code: 'BINV3', desc: '3 BUSINESS DAYS AFTER INVOICE DATE' }, { code: 'BINV5', desc: '5 BUSINESS DAYS AFTER INVOICE DATE' },
+    { code: 'BINV7', desc: '7 BUSINESS DAYS AFTER INVOICE DATE' }, { code: '7BD', desc: '7 BUSINESS DAYS' },
+    { code: 'BINV10', desc: '10 BUSINESS DAYS AFTER INVOICE DATE' }, { code: 'BINV15', desc: '15 BUSINESS DAYS AFTER INVOICE DATE' },
+    { code: 'BINV20', desc: '20 BUSINESS DAYS AFTER INVOICE DATE' }, { code: 'BINV21', desc: '21 BUSINESS DAYS AFTER INVOICE DATE' },
+    { code: 'BINV30', desc: '30 BUSINESS DAYS AFTER INVOICE DATE' } ] },
+  { group: 'Business days after delivery', terms: [
+    { code: 'BINV1', desc: '1 BUSINESS DAY AFTER DELIVERY DATE' },
+    { code: 'DEL10BD', desc: '10 BUSINESS DAYS AFTER DELIVERY' }, { code: 'DEL15BD', desc: '15 BUSINESS DAYS AFTER DELIVERY' } ] },
+  { group: 'Advance / down payment', terms: [
+    { code: 'ADV100', desc: '100% IN ADVANCE' },
+    { code: 'DP10BL45', desc: '10% DOWN PAYMENT, 90% 45 DAYS AFTER B/L DATE' },
+    { code: 'DP10LC60', desc: '10% DOWN PAYMENT, 90% 60 DAYS L/C' },
+    { code: 'DP10LC90', desc: '10% DOWN PAYMENT, 90% 90 DAYS L/C' },
+    { code: 'DP15BL45', desc: '15% DP, 85% L/C OR TT 45 DAYS FROM B/L DATE' },
+    { code: 'DP20INV30', desc: '20% DOWN PAYMENT, 80% 30 DAYS AFTER INVOICE DATE' },
+    { code: 'DP25BL75', desc: '25% DOWN PAYMENT, 75% 7 DAYS AFTER INVOICE DATE' },
+    { code: 'DP30BC', desc: '30% DOWN PAYMENT, 70% BEFORE COLLECTION' },
+    { code: 'DP30DO30', desc: '30% DOWN PAYMENT, 70% 30 DAYS UPON DO DATE' },
+    { code: 'DP50BD', desc: '50% DOWN PAYMENT, 50% BEFORE DELIVERY' } ] }
+];
+function paymentTermLabel(t){ return t.code + ' \u2013 ' + t.desc; }
+function paymentTermOptionsHtml(selected){
+  selected = selected || '';
+  const labels = [];
+  let html = '<option value="">Select payment terms…</option>';
+  PAYMENT_TERM_GROUPS.forEach(g => {
+    html += '<optgroup label="' + escapeHtml(g.group) + '">';
+    g.terms.forEach(t => {
+      const label = paymentTermLabel(t);
+      labels.push(label);
+      html += '<option value="' + escapeHtml(label) + '"' + (label === selected ? ' selected' : '') + '>' + escapeHtml(label) + '</option>';
+    });
+    html += '</optgroup>';
+  });
+  // Older requests were typed in free text (e.g. "Net 30") — keep that value selectable so editing doesn't wipe it.
+  if (selected && !labels.includes(selected)) {
+    html += '<optgroup label="Current value (not in list)"><option value="' + escapeHtml(selected) + '" selected>' + escapeHtml(selected) + '</option></optgroup>';
+  }
+  return html;
+}
+
 const SP_ROLES_LIST_NAME = "AP System Roles";            // second SharePoint list — holds department approvers + Finance team, editable from the User Management tab
 
 /* Fallback values, used only until the "AP System Roles" list has rows —
@@ -1399,6 +1459,7 @@ async function snapshotFiles(fileList){
   }
   return out;
 }
+document.getElementById('f-payment-terms').innerHTML = paymentTermOptionsHtml('');
 document.getElementById('f-files').addEventListener('change', async (e) => {
   const picked = await snapshotFiles(e.target.files);
   e.target.value = '';
@@ -1417,7 +1478,8 @@ function toggleUrgentJustification(){
   document.getElementById('urgent-justification-row').style.display = checked ? '' : 'none';
 }
 function clearNewRequestForm(){
-  ['f-vendor','f-invoice-number','f-payment-terms','f-invoice-date','f-amount','f-description','f-urgent-justification'].forEach(id => {
+  document.getElementById('f-payment-terms').innerHTML = paymentTermOptionsHtml('');
+  ['f-vendor','f-invoice-number','f-invoice-date','f-amount','f-description','f-urgent-justification'].forEach(id => {
     document.getElementById(id).value = '';
   });
   document.getElementById('f-department').value = defaultDepartmentForUser();
@@ -1445,7 +1507,7 @@ function readNewRequestForm(){
 function validateNewRequestForm(form){
   if (!form.department) return 'Please choose a requesting department.';
   if (!form.vendorName) return 'Please enter the vendor name.';
-  if (!form.paymentTerms) return 'Please enter the payment terms.';
+  if (!form.paymentTerms) return 'Please select the payment terms.';
   if (!form.currency) return 'Please select a currency.';
   if (!form.amount || form.amount <= 0) return 'Please enter an amount greater than zero.';
   if (!form.description) return 'Please describe the purpose of this request.';
@@ -1943,7 +2005,7 @@ function renderEditDraftForm(record, introHtml){
       '<div class="field-row"><label class="field-label">Document Number</label>' +
         '<input class="text-field" type="text" id="ed-invoice-number" value="' + escapeHtml(record.invoiceNumber) + '"></div>' +
       '<div class="field-row"><label class="field-label">Payment Terms <span class="req">*</span></label>' +
-        '<input class="text-field" type="text" id="ed-payment-terms" value="' + escapeHtml(record.paymentTerms) + '"></div>' +
+        '<select class="text-field" id="ed-payment-terms">' + paymentTermOptionsHtml(record.paymentTerms) + '</select></div>' +
       '<div class="field-row"><label class="field-label">Document Date</label>' +
         '<input class="text-field" type="date" id="ed-invoice-date" value="' + toDateInputValue(record.invoiceDate) + '"></div>' +
       '<div class="field-row"><label class="field-label">Amount <span class="req">*</span></label>' +
@@ -1987,7 +2049,7 @@ function readEditDraftForm(){
 function validateEditDraftForm(form){
   if (!form.department) return 'Please choose a requesting department.';
   if (!form.vendorName) return 'Please enter the vendor name.';
-  if (!form.paymentTerms) return 'Please enter the payment terms.';
+  if (!form.paymentTerms) return 'Please select the payment terms.';
   if (!form.currency) return 'Please select a currency.';
   if (!form.amount || form.amount <= 0) return 'Please enter an amount greater than zero.';
   if (!form.description) return 'Please describe the purpose of this request.';
