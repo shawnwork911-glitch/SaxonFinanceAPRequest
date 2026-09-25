@@ -145,6 +145,24 @@
   }
   .tab-btn .count.zero { background: var(--line); color: var(--sub); }
 
+  /* Sub-tabs inside a view (e.g. Analytics → Total Request / Request Timeline) */
+  .subtab-bar {
+    display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;
+    margin-bottom: 18px;
+  }
+  .subtabs {
+    display: inline-flex; gap: 4px; padding: 4px; background: var(--panel);
+    border: 1px solid var(--line); border-radius: 8px;
+  }
+  .subtab-btn {
+    font-size: 13px; font-weight: 600; color: var(--sub); background: transparent;
+    border: none; border-radius: 6px; padding: 7px 14px; cursor: pointer; font-family: inherit;
+  }
+  .subtab-btn:hover { color: var(--ink); }
+  .subtab-btn.active { background: var(--accent); color: #fff; }
+  .subview { display: none; }
+  .subview.active { display: block; }
+
   .view { display: none; }
   .view.active { display: block; }
 
@@ -519,20 +537,29 @@
 
   <!-- ============ ANALYTICS ============ -->
   <div class="view" id="view-analytics">
+    <div class="subtab-bar">
+      <div class="subtabs" role="tablist">
+        <button type="button" class="subtab-btn active" role="tab" data-subview="total" onclick="switchAnalyticsSubtab('total')">Total Request</button>
+        <button type="button" class="subtab-btn" role="tab" data-subview="timeline" onclick="switchAnalyticsSubtab('timeline')">Request Timeline</button>
+      </div>
+      <div class="filters">
+        <select class="filter-select" id="analytics-dept-filter" onchange="renderAnalyticsAll()">
+          <option value="">All departments</option>
+          <option value="Digital Growth &amp; Branding">Digital Growth &amp; Branding</option>
+          <option value="Strategic Partnerships &amp; Events">Strategic Partnerships &amp; Events</option>
+          <option value="Operations">Operations</option>
+          <option value="HR Admin">HR Admin</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Sub-tab: Total Request -->
+    <div class="subview active" id="analytics-sub-total">
     <div class="card">
       <div class="card-head">
         <div>
           <h2>Overview</h2>
           <div class="muted small" id="analytics-scope-note"></div>
-        </div>
-        <div class="filters">
-          <select class="filter-select" id="analytics-dept-filter" onchange="renderAnalyticsAll()">
-            <option value="">All departments</option>
-            <option value="Digital Growth &amp; Branding">Digital Growth &amp; Branding</option>
-            <option value="Strategic Partnerships &amp; Events">Strategic Partnerships &amp; Events</option>
-            <option value="Operations">Operations</option>
-            <option value="HR Admin">HR Admin</option>
-          </select>
         </div>
       </div>
       <div class="stat-grid" id="analytics-stats"></div>
@@ -545,6 +572,10 @@
       <div class="card-head"><h2>Requests submitted per month</h2></div>
       <div id="analytics-trend-chart"></div>
     </div>
+    </div>
+
+    <!-- Sub-tab: Request Timeline -->
+    <div class="subview" id="analytics-sub-timeline">
     <div class="card">
       <div class="toolbar-row">
         <h2 style="margin:0;">Request Timeline</h2>
@@ -555,6 +586,7 @@
         </div>
       </div>
       <div id="analytics-timeline-list"></div>
+    </div>
     </div>
   </div>
 
@@ -1741,6 +1773,14 @@ function renderAnalyticsTimeline(){
   document.getElementById('analytics-timeline-list').innerHTML = scope.length
     ? scope.map(renderTimelineRow).join('')
     : '<div class="muted small" style="padding:20px 0;">No submitted requests yet.</div>';
+}
+function switchAnalyticsSubtab(name){
+  document.querySelectorAll('#view-analytics .subtab-btn').forEach(b => {
+    const on = b.dataset.subview === name;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
+  document.querySelectorAll('#view-analytics .subview').forEach(v => v.classList.toggle('active', v.id === 'analytics-sub-' + name));
 }
 function renderAnalyticsAll(){
   renderAnalyticsScopeNote();
