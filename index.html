@@ -392,7 +392,7 @@
           <input class="text-field" type="text" id="f-vendor" placeholder="e.g. Acme Supplies Pte Ltd">
         </div>
         <div class="field-row">
-          <label class="field-label">Document Number</label>
+          <label class="field-label">Document Number <span class="req">*</span></label>
           <input class="text-field" type="text" id="f-invoice-number" placeholder="e.g. DOC-10234">
         </div>
         <div class="field-row">
@@ -1519,6 +1519,7 @@ function readNewRequestForm(){
 function validateNewRequestForm(form){
   if (!form.department) return 'Please choose a requesting department.';
   if (!form.vendorName) return 'Please enter the vendor name.';
+  if (!form.invoiceNumber) return 'Please enter the document number.';
   if (!form.paymentTerms) return 'Please select the payment terms.';
   if (!form.currency) return 'Please select a currency.';
   if (!form.amount || form.amount <= 0) return 'Please enter an amount greater than zero.';
@@ -2014,7 +2015,7 @@ function renderEditDraftForm(record, introHtml){
         '<select class="text-field" id="ed-department">' + departmentOptionsHtml(record.department) + '</select></div>' +
       '<div class="field-row"><label class="field-label">Vendor Name <span class="req">*</span></label>' +
         '<input class="text-field" type="text" id="ed-vendor" value="' + escapeHtml(record.vendorName) + '"></div>' +
-      '<div class="field-row"><label class="field-label">Document Number</label>' +
+      '<div class="field-row"><label class="field-label">Document Number <span class="req">*</span></label>' +
         '<input class="text-field" type="text" id="ed-invoice-number" value="' + escapeHtml(record.invoiceNumber) + '"></div>' +
       '<div class="field-row"><label class="field-label">Payment Terms <span class="req">*</span></label>' +
         '<select class="text-field" id="ed-payment-terms">' + paymentTermOptionsHtml(record.paymentTerms) + '</select></div>' +
@@ -2061,6 +2062,7 @@ function readEditDraftForm(){
 function validateEditDraftForm(form){
   if (!form.department) return 'Please choose a requesting department.';
   if (!form.vendorName) return 'Please enter the vendor name.';
+  if (!form.invoiceNumber) return 'Please enter the document number.';
   if (!form.paymentTerms) return 'Please select the payment terms.';
   if (!form.currency) return 'Please select a currency.';
   if (!form.amount || form.amount <= 0) return 'Please enter an amount greater than zero.';
