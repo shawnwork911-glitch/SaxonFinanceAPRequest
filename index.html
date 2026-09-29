@@ -694,9 +694,8 @@
       subfolders on its own the first time they're needed. PeriodFolder is a
       semi-monthly cutoff folder (e.g. "12th Sep 2026", "22th Sep 2026") —
       see getPeriodFolderName(). Operations requests are ALSO copied to
-      Documents/4.PURCHASE ORDER/AP INVOICE/z Direct From AP HTML, with the
-      same PeriodFolder/Department/VendorName subfolders — see
-      DEPT_UPLOAD_DESTINATIONS.
+      Documents/4.PURCHASE ORDER/AP INVOICE/z Direct From AP HTML/VendorName
+      (vendor folder only) — see DEPT_UPLOAD_DESTINATIONS.
    4. Fill in the values below. */
 const TENANT_ID = "ab7c8c1e-dc1d-431f-ba8b-e4de2b047f8b"; // Directory (tenant) ID — "Finance AP Request" app registration
 const CLIENT_ID = "15ab80ca-fab7-4755-9f9b-5275c47dec90"; // Application (client) ID — "Finance AP Request" app registration
@@ -708,9 +707,9 @@ const DOC_LIBRARY_ROOT = "Finance Documents";            // folder inside that l
 /* Extra copy destinations per department. Every department's attachments always upload to
    SP_DOC_LIBRARY_NAME / DOC_LIBRARY_ROOT above (the main copy, whose links are saved on the
    request). A department listed here ALSO gets a second copy in its own library + root folder,
-   using the same subfolder format underneath: <root>/PeriodFolder/Department/VendorName.
-   library: the document library's name, or "" for the site's default "Documents" library
-   (URL path "Shared Documents"). root: folder path inside that library. */
+   filed straight into a vendor (company name) folder: <root>/VendorName — no period or
+   department subfolders. library: the document library's name, or "" for the site's default
+   "Documents" library (URL path "Shared Documents"). root: folder path inside that library. */
 const DEPT_UPLOAD_DESTINATIONS = {
   "Operations": { library: "", root: "4.PURCHASE ORDER/AP INVOICE/z Direct From AP HTML" }
 };
@@ -981,7 +980,7 @@ function uploadDestinationsFor(department){
     const libLabel = extra.library || 'Documents';
     const driveId = extra.library ? driveIdsByName[extra.library.toLowerCase()] : defaultDriveId;
     if (!driveId) throw new Error('Could not find the "' + libLabel + '" document library on this site for the ' + department + ' copy of the attachments.');
-    list.push({ driveId, root: extra.root, label: libLabel + ' / ' + extra.root });
+    list.push({ driveId, root: extra.root, label: libLabel + ' / ' + extra.root, vendorOnly: true });
   }
   return list;
 }
@@ -1323,7 +1322,9 @@ async function uploadFilesForRequest(department, vendorName, requestId, files, o
   // dests[0] is the main Finance Documents copy (its links are what the request stores);
   // any further entries are extra copies — see DEPT_UPLOAD_DESTINATIONS.
   const dests = uploadDestinationsFor(department).map(d => {
-    const folderPath = d.root + '/' + periodFolder + '/' + department + '/' + subFolder;
+    const folderPath = d.vendorOnly
+      ? d.root + '/' + subFolder                                        // extra copy: <root>/VendorName
+      : d.root + '/' + periodFolder + '/' + department + '/' + subFolder; // main copy: <root>/Period/Department/VendorName
     return Object.assign({}, d, { folderPath, cacheKey: d.driveId + '|' + folderPath });
   });
   const results = new Array(files.length);
