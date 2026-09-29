@@ -693,7 +693,10 @@
       the app creates the Finance Documents/PeriodFolder/Department/VendorName
       subfolders on its own the first time they're needed. PeriodFolder is a
       semi-monthly cutoff folder (e.g. "12th Sep 2026", "22th Sep 2026") —
-      see getPeriodFolderName().
+      see getPeriodFolderName(). Operations requests are ALSO copied to
+      Documents/4.PURCHASE ORDER/AP INVOICE/z Direct From AP HTML, with the
+      same PeriodFolder/Department/VendorName subfolders — see
+      DEPT_UPLOAD_DESTINATIONS.
    4. Fill in the values below. */
 const TENANT_ID = "ab7c8c1e-dc1d-431f-ba8b-e4de2b047f8b"; // Directory (tenant) ID — "Finance AP Request" app registration
 const CLIENT_ID = "15ab80ca-fab7-4755-9f9b-5275c47dec90"; // Application (client) ID — "Finance AP Request" app registration
@@ -702,6 +705,15 @@ const SP_SITE_PATH = "/sites/Operations";                // the site the list & 
 const SP_LIST_NAME = "Finance AP Record";                // must match the SharePoint list's display name exactly
 const SP_DOC_LIBRARY_NAME = "Process Improvement";       // the document library (not the site's default "Documents") that holds the upload folder
 const DOC_LIBRARY_ROOT = "Finance Documents";            // folder inside that library — uploads land in DOC_LIBRARY_ROOT/PeriodFolder/Department/VendorName
+/* Extra copy destinations per department. Every department's attachments always upload to
+   SP_DOC_LIBRARY_NAME / DOC_LIBRARY_ROOT above (the main copy, whose links are saved on the
+   request). A department listed here ALSO gets a second copy in its own library + root folder,
+   using the same subfolder format underneath: <root>/PeriodFolder/Department/VendorName.
+   library: the document library's name, or "" for the site's default "Documents" library
+   (URL path "Shared Documents"). root: folder path inside that library. */
+const DEPT_UPLOAD_DESTINATIONS = {
+  "Operations": { library: "", root: "4.PURCHASE ORDER/AP INVOICE/z Direct From AP HTML" }
+};
 const GRAPH_SCOPES = ["Sites.ReadWrite.All", "User.Read", "Mail.Send"];
 /* Payment terms, copied from Business Central's Payment Terms table.
    Requesters pick from this list so Finance gets the exact BC code.
@@ -838,6 +850,8 @@ const DATA_FIELD_MAP = {
 let currentAccount = null;
 let siteId = null, listId = null;
 let docLibraryDriveId = null; // the "Process Improvement" library's drive ID — see resolveDocLibraryDrive()
+let defaultDriveId = null;    // the site's default "Documents" (Shared Documents) library — used by DEPT_UPLOAD_DESTINATIONS entries with library ""
+let driveIdsByName = {};      // lower-cased library name -> drive ID, for DEPT_UPLOAD_DESTINATIONS entries that name a library
 let columnMapCache = null;
 let allItemsCache = [];
 let currentView = 'new';
@@ -951,8 +965,25 @@ async function resolveSiteAndList(){
    drive lookup rather than the "/sites/{siteId}/drive" shorthand. */
 async function resolveDocLibraryDrive(){
   const drives = await graphFetch("/sites/" + siteId + "/drives?$select=id,name");
-  const match = (drives.value || []).find(d => (d.name || '').toLowerCase() === SP_DOC_LIBRARY_NAME.toLowerCase());
-  docLibraryDriveId = match ? match.id : null;
+  driveIdsByName = {};
+  (drives.value || []).forEach(d => { if (d.name) driveIdsByName[d.name.toLowerCase()] = d.id; });
+  docLibraryDriveId = driveIdsByName[SP_DOC_LIBRARY_NAME.toLowerCase()] || null;
+  try { const def = await graphFetch("/sites/" + siteId + "/drive?$select=id,name"); defaultDriveId = def.id; }
+  catch (e) { defaultDriveId = null; }
+}
+/* Every library + root folder a department's attachments go to. The first entry is always the
+   main Finance Documents copy; any DEPT_UPLOAD_DESTINATIONS entry is added as an extra copy. */
+function uploadDestinationsFor(department){
+  if (!docLibraryDriveId) throw new Error('Could not find the "' + SP_DOC_LIBRARY_NAME + '" document library on this site.');
+  const list = [{ driveId: docLibraryDriveId, root: DOC_LIBRARY_ROOT, label: SP_DOC_LIBRARY_NAME + ' / ' + DOC_LIBRARY_ROOT }];
+  const extra = DEPT_UPLOAD_DESTINATIONS[department];
+  if (extra) {
+    const libLabel = extra.library || 'Documents';
+    const driveId = extra.library ? driveIdsByName[extra.library.toLowerCase()] : defaultDriveId;
+    if (!driveId) throw new Error('Could not find the "' + libLabel + '" document library on this site for the ' + department + ' copy of the attachments.');
+    list.push({ driveId, root: extra.root, label: libLabel + ' / ' + extra.root });
+  }
+  return list;
 }
 async function getColumnMap(){
   if (columnMapCache) return columnMapCache;
@@ -1213,15 +1244,14 @@ function itemToRecord(item, colMap){
 }
 
 /* ---- Folder creation + file upload ---- */
-async function ensureFolderPath(fullPath){
-  if (!docLibraryDriveId) throw new Error('Could not find the "' + SP_DOC_LIBRARY_NAME + '" document library on this site.');
+async function ensureFolderPath(driveId, fullPath){
   const segments = fullPath.split('/').filter(Boolean);
   let built = '';
   for (const seg of segments) {
     const parentEncoded = built ? encodeURIComponent(built).replace(/%2F/g, '/') : '';
     try {
       await graphFetch(
-        "/drives/" + docLibraryDriveId + "/root:/" + (parentEncoded ? parentEncoded + '/' : '') + ":/children",
+        "/drives/" + driveId + "/root:/" + (parentEncoded ? parentEncoded + '/' : '') + ":/children",
         { method: 'POST', body: JSON.stringify({ name: seg, folder: {}, "@microsoft.graph.conflictBehavior": "fail" }) }
       );
     } catch (e) {
@@ -1230,8 +1260,7 @@ async function ensureFolderPath(fullPath){
     built = built ? built + '/' + seg : seg;
   }
 }
-async function uploadOneFile(folderPath, file, dupIndex){
-  if (!docLibraryDriveId) throw new Error('Could not find the "' + SP_DOC_LIBRARY_NAME + '" document library on this site.');
+async function uploadOneFile(driveId, folderPath, file, dupIndex){
   const safeName = file.name.replace(/[#%*:<>?/\\{|}]/g, '_');
   // Keep the file's actual name, but stamp a timestamp behind it (before the extension) so
   // re-uploading a file with the same name never silently overwrites an earlier one.
@@ -1248,7 +1277,7 @@ async function uploadOneFile(folderPath, file, dupIndex){
     throw new Error('The attachment "' + file.name + '" could not be read — it may have been moved, renamed or deleted after you attached it. Remove it, then attach it again.');
   }
   const item = await graphFetch(
-    "/drives/" + docLibraryDriveId + "/root:/" + encodedPath + ":/content?@microsoft.graph.conflictBehavior=replace",
+    "/drives/" + driveId + "/root:/" + encodedPath + ":/content?@microsoft.graph.conflictBehavior=replace",
     { method: 'PUT', body: buf, headers: { 'Content-Type': file.type || 'application/octet-stream' } }
   );
   return { name: item.name || stampedName, url: item.webUrl };
@@ -1275,7 +1304,7 @@ const MAX_FILE_BYTES = 250 * 1024 * 1024; // Graph's single-request upload limit
 const UPLOAD_CONCURRENCY = 3;              // a few at a time: faster than one-by-one, gentle enough to avoid throttling
 // Remembers which File objects already made it to SharePoint, so if a save fails part-way
 // through (say on file 17 of 20), clicking Save again only uploads the remaining files.
-const uploadedFileCache = new WeakMap();   // File -> { key, doc }
+const uploadedFileCache = new WeakMap();   // File -> { [driveId|folderPath]: doc } — one entry per destination it reached
 /* SharePoint folder names can't contain " * : < > ? / \ | # % or control characters, and can't
    start/end with spaces or end with a dot — clean the vendor name so it's always a valid folder. */
 function vendorFolderName(vendorName){
@@ -1291,47 +1320,61 @@ async function uploadFilesForRequest(department, vendorName, requestId, files, o
   const periodFolder = getPeriodFolderName();
   // Files are grouped by vendor; fall back to the request ID if no vendor name was entered yet (e.g. an early draft).
   const subFolder = vendorFolderName(vendorName) || requestId;
-  const folderPath = DOC_LIBRARY_ROOT + '/' + periodFolder + '/' + department + '/' + subFolder;
-  const cacheKey = folderPath;
-  const results = new Array(files.length);
-  const todo = [];
-  files.forEach((f, i) => {
-    const hit = uploadedFileCache.get(f);
-    if (hit && hit.key === cacheKey) results[i] = hit.doc; else todo.push(i);
+  // dests[0] is the main Finance Documents copy (its links are what the request stores);
+  // any further entries are extra copies — see DEPT_UPLOAD_DESTINATIONS.
+  const dests = uploadDestinationsFor(department).map(d => {
+    const folderPath = d.root + '/' + periodFolder + '/' + department + '/' + subFolder;
+    return Object.assign({}, d, { folderPath, cacheKey: d.driveId + '|' + folderPath });
   });
-  let done = files.length - todo.length;
-  if (onProgress) onProgress(done, files.length);
-  if (todo.length) {
-    await ensureFolderPath(folderPath);
+  const results = new Array(files.length);
+  const tasks = []; // { fileIndex, destIndex } still to upload
+  files.forEach((f, i) => {
+    const hits = uploadedFileCache.get(f) || {};
+    dests.forEach((d, di) => {
+      if (hits[d.cacheKey]) { if (di === 0) results[i] = hits[d.cacheKey]; }
+      else tasks.push({ fileIndex: i, destIndex: di });
+    });
+  });
+  const total = files.length * dests.length;
+  let done = total - tasks.length;
+  if (onProgress) onProgress(done, total);
+  if (tasks.length) {
+    const neededDests = [...new Set(tasks.map(t => t.destIndex))];
+    for (const di of neededDests) await ensureFolderPath(dests[di].driveId, dests[di].folderPath);
     // Number repeated names so they get distinct file names in the folder
     const seen = {};
     const dupIndex = files.map(f => { const k = f.name.toLowerCase(); seen[k] = (seen[k] || 0) + 1; return seen[k] - 1; });
+    // Same fixed timestamp for every upload in this batch, so both copies of a file share one name.
     fileTimestampSuffix.fixedDate = new Date();
     const failures = [];
     let next = 0;
     const worker = async () => {
-      while (next < todo.length) {
-        const i = todo[next++];
+      while (next < tasks.length) {
+        const t = tasks[next++];
+        const f = files[t.fileIndex], d = dests[t.destIndex];
         try {
-          const doc = await uploadOneFile(folderPath, files[i], dupIndex[i]);
-          results[i] = doc;
-          uploadedFileCache.set(files[i], { key: cacheKey, doc });
+          const doc = await uploadOneFile(d.driveId, d.folderPath, f, dupIndex[t.fileIndex]);
+          if (t.destIndex === 0) results[t.fileIndex] = doc;
+          const hits = uploadedFileCache.get(f) || {};
+          hits[d.cacheKey] = doc;
+          uploadedFileCache.set(f, hits);
         } catch (e) {
-          failures.push({ name: files[i].name, message: e.message });
+          failures.push({ name: f.name, where: d.label, message: e.message });
         }
         done++;
-        if (onProgress) onProgress(done, files.length);
+        if (onProgress) onProgress(done, total);
       }
     };
     try {
-      await Promise.all(Array.from({ length: Math.min(UPLOAD_CONCURRENCY, todo.length) }, worker));
+      await Promise.all(Array.from({ length: Math.min(UPLOAD_CONCURRENCY, tasks.length) }, worker));
     } finally {
       fileTimestampSuffix.fixedDate = null;
     }
     if (failures.length) {
-      const okCount = files.length - failures.length;
-      throw new Error(failures.length + ' of ' + files.length + ' attachment(s) failed to upload (' +
-        failures.map(f => f.name).join(', ') + '). ' + okCount + ' uploaded fine and won\'t be uploaded again — click Save again to retry the rest. Detail: ' + failures[0].message);
+      const okCount = total - failures.length;
+      throw new Error(failures.length + ' of ' + total + ' upload(s) failed (' +
+        failures.map(f => f.name + (dests.length > 1 ? ' → ' + f.where : '')).join(', ') + '). ' + okCount +
+        ' uploaded fine and won\'t be uploaded again — click Save again to retry the rest. Detail: ' + failures[0].message);
     }
   }
   return results;
@@ -2611,7 +2654,7 @@ async function showSignedInUI(){
   try {
     await resolveSiteAndList();
     await getColumnMap();
-    try { await resolveDocLibraryDrive(); } catch (e) { docLibraryDriveId = null; } // non-fatal — only blocks file uploads, not the rest of the app
+    try { await resolveDocLibraryDrive(); } catch (e) { docLibraryDriveId = null; defaultDriveId = null; driveIdsByName = {}; } // non-fatal — only blocks file uploads, not the rest of the app
     await resolveRolesList();
     await loadRolesConfig();
     setupRoleUI();
