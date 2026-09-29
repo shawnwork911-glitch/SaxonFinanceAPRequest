@@ -2113,12 +2113,15 @@ function renderModalBody(record, mode){
       ? 'This request has already been approved by <strong>' + escapeHtml(record.approverEmail || 'the approver') + '</strong> and is waiting for Finance review.'
       : 'This request is currently waiting for approval from <strong>' + escapeHtml(record.approverEmail || 'the approver') + '</strong>.';
     const intro = '<div class="field-hint" style="margin-bottom:12px; padding:10px 12px; border-radius:8px; background:var(--warn-bg); color:var(--warn);">' +
-      stageNote + ' Saving your changes will <strong>withdraw it from its current step and restart the full approval process</strong> — it goes back to the ' +
-      'department approver (or the Urgent Payment Approver if ticked), then on to Finance. Any existing approval will be cleared.</div>';
+      stageNote + ' Either button below will <strong>withdraw it from its current step</strong> and clear any existing approval.' +
+      '<br><strong>Save as draft</strong> keeps your changes under "Your drafts" so you can finish them and submit for approval later.' +
+      '<br><strong>Resubmit for approval</strong> restarts the full approval process now — it goes back to the ' +
+      'department approver (or the Urgent Payment Approver if ticked), then on to Finance.</div>';
     return renderEditDraftForm(record, intro) + historyHtml(record) +
       '<hr class="section-divider"><div class="btn-row">' +
         '<button type="button" class="btn btn-ghost" onclick="openDetail(\'' + record.id + '\',\'mine\')">Cancel</button>' +
-        '<button type="button" class="btn btn-primary" id="btn-resubmit-edits" onclick="handleResubmitEdits(\'' + record.id + '\')">Save changes &amp; resubmit for approval</button>' +
+        '<button type="button" class="btn btn-ghost" id="btn-withdraw-draft" onclick="handleWithdrawToDraft(\'' + record.id + '\')">Save as draft</button>' +
+        '<button type="button" class="btn btn-primary" id="btn-resubmit-edits" onclick="handleResubmitEdits(\'' + record.id + '\')">Resubmit for approval</button>' +
       '</div>';
   }
 
@@ -2149,7 +2152,7 @@ function renderModalBody(record, mode){
     html += '<hr class="section-divider">' +
       '<div class="field-hint" style="margin-bottom:8px;">Need to correct something? You can edit the details and attachments while this request is ' +
       (record.status === STATUS.PENDING_FINANCE ? 'waiting for Finance review' : 'waiting for approval') +
-      ' — note that it will restart the whole approval process.</div>' +
+      ' — you can save it back as a draft to finish later, or resubmit it straight away. Either way, it restarts the approval process.</div>' +
       '<div class="btn-row"><button type="button" class="btn btn-primary" onclick="openDetail(\'' + record.id + '\',\'edit-submitted\')">Edit request</button></div>';
   }
   if (mode === 'mine' && record.status === STATUS.REJECTED_APPROVER && record.requestorEmail.toLowerCase() === myEmail()) {
@@ -2259,9 +2262,63 @@ async function notifyFinanceOfWithdrawal(record, changeSummary){
     ];
     await sendGraphMail(financeMembers.map(m => m.email), subject, lines);
   } catch (e) {
-    showToast('Resubmitted, but the Finance withdrawal email could not be sent: ' + e.message, 'error');
+    showToast('Saved, but the Finance withdrawal email could not be sent: ' + e.message, 'error');
   }
 }
+// Withdraws a submitted request back to Draft status with the user's edits,
+// so they can keep working on it and submit it for approval later from "Your drafts".
+async function handleWithdrawToDraft(itemId){
+  const record = findRecord(itemId);
+  if (!record) return;
+  const form = readEditDraftForm();
+  if (!form.department) { showToast('Please choose a department before saving.', 'error'); return; }
+  if (!confirm('Save your changes as a draft? This withdraws the request from approval and clears any existing approval. You can submit it again later from "Your drafts".')) return;
+  const btn = document.getElementById('btn-withdraw-draft');
+  const otherBtn = document.getElementById('btn-resubmit-edits');
+  if (otherBtn) otherBtn.disabled = true;
+  setBusy(btn, true, 'Saving…');
+  try {
+    // Re-read the live item so we don't overwrite a decision made after this modal was opened.
+    const live = await fetchCurrentRecord(itemId);
+    if (!canEditSubmitted(live)) {
+      showToast('This request can no longer be edited — its status changed to "' + (live.status || 'unknown') + '". Your changes were not saved.', 'error');
+      setBusy(btn, false);
+      if (otherBtn) otherBtn.disabled = false;
+      await refreshAll();
+      openDetail(itemId, 'mine');
+      return;
+    }
+    const docsBefore = parseDocLinks(live.documentLinks);
+    const newDocs = modalContext.editFiles.length ? await uploadFilesForRequest(form.department, form.vendorName, live.requestId, modalContext.editFiles, uploadProgressLabel(btn, 'Uploading')) : [];
+    const combinedDocs = (modalContext.editDocs || []).concat(newDocs);
+    const approverEmail = form.isUrgent ? (urgentApproverEmail || '') : ((deptApproverMap[form.department] || {}).email || '');
+    const changeSummary = describeEdits(live, form, docsBefore, combinedDocs);
+    const previousStage = live.status === STATUS.PENDING_FINANCE ? 'Finance review (already approved by ' + (live.approverEmail || 'approver') + ')' : 'department approval';
+    const historyMsg = currentAccount.username + ' withdrew the request from ' + previousStage + ' and saved it back as a draft. Changes: ' + changeSummary + '.';
+    const patch = Object.assign({}, form, {
+      title: form.vendorName,
+      documentLinks: JSON.stringify(combinedDocs),
+      status: STATUS.DRAFT,
+      approverEmail,
+      // Clear the previous approval / Finance outcome so it is decided afresh when resubmitted.
+      approvalDecision: '', approvalDate: '', approvalComments: '',
+      financeReviewer: '', financeDecision: '', financeDecisionDate: '', financeComments: '', paymentReference: '',
+      historyLog: appendHistory(live.historyLog, historyMsg)
+    });
+    await updateRequestItem(itemId, patch);
+    const updated = Object.assign({}, live, patch);
+    await notifyApproverOfWithdrawal(live, updated, changeSummary);
+    if (live.status === STATUS.PENDING_FINANCE) await notifyFinanceOfWithdrawal(updated, changeSummary);
+    modalContext.editFiles = [];
+    showToast('Request ' + live.requestId + ' saved as draft. Submit it for approval from "Your drafts" when ready.', 'success');
+    await refreshAll();
+    // Reopen in draft mode so the user sees Save changes / Submit for approval straight away.
+    openDetail(itemId, 'edit-draft');
+  } catch (e) { showToast('Could not save as draft: ' + e.message, 'error'); }
+  setBusy(btn, false);
+  if (otherBtn) otherBtn.disabled = false;
+}
+
 async function handleResubmitEdits(itemId){
   const record = findRecord(itemId);
   if (!record) return;
@@ -2270,6 +2327,8 @@ async function handleResubmitEdits(itemId){
   if (err) { showToast(err, 'error'); return; }
   if (!confirm('Save your changes and restart the approval process? Any existing approval on this request will be cleared.')) return;
   const btn = document.getElementById('btn-resubmit-edits');
+  const draftBtn = document.getElementById('btn-withdraw-draft');
+  if (draftBtn) draftBtn.disabled = true;
   setBusy(btn, true, 'Resubmitting…');
   try {
     // Re-read the live item so we don't overwrite a decision the approver / Finance
@@ -2278,6 +2337,7 @@ async function handleResubmitEdits(itemId){
     if (!canEditSubmitted(live)) {
       showToast('This request can no longer be edited — its status changed to "' + (live.status || 'unknown') + '". Your changes were not saved.', 'error');
       setBusy(btn, false);
+      if (draftBtn) draftBtn.disabled = false;
       await refreshAll();
       openDetail(itemId, 'mine');
       return;
@@ -2313,6 +2373,7 @@ async function handleResubmitEdits(itemId){
     switchTab('mine');
   } catch (e) { showToast('Could not resubmit request: ' + e.message, 'error'); }
   setBusy(btn, false);
+  if (draftBtn) draftBtn.disabled = false;
 }
 
 function handleRejectClick(){
@@ -2408,6 +2469,31 @@ async function notifyApproverOfNewRequest(record){
   } catch (e) {
     // Non-fatal — the submission itself already succeeded; just flag that the email didn't go out.
     showToast('Request submitted, but the approver notification email could not be sent: ' + e.message, 'error');
+  }
+}
+// Tells the approver the request was assigned to that the requestor has pulled it back to Draft.
+// Uses the approver on the request *before* withdrawal, since that's who had it in their queue.
+async function notifyApproverOfWithdrawal(before, updated, changeSummary){
+  const to = before.approverEmail;
+  if (!to) return;
+  try {
+    const wasApproved = before.status === STATUS.PENDING_FINANCE;
+    const subject = '[AP Request] ' + before.requestId + ' — withdrawn by requestor (saved as draft)';
+    const lines = [
+      wasApproved
+        ? 'Request ' + escapeHtml(before.requestId) + ', which you approved, was edited by the requestor and withdrawn from Finance review. Your approval has been cleared.'
+        : 'Request ' + escapeHtml(before.requestId) + ' was withdrawn by the requestor and is no longer waiting on your approval.',
+      'It has been saved back as a draft. If the requestor submits it again, you will receive a new approval email — no action is needed from you right now.',
+      '',
+      'Department: ' + escapeHtml(updated.department),
+      'Vendor: ' + escapeHtml(updated.vendorName),
+      'Amount: ' + escapeHtml(fmtAmount(updated.amount, updated.currency)),
+      'Requestor: ' + escapeHtml(updated.requestorName) + ' &lt;' + escapeHtml(updated.requestorEmail) + '&gt;',
+      'Changes: ' + escapeHtml(changeSummary)
+    ];
+    await sendGraphMail([to], subject, lines);
+  } catch (e) {
+    showToast('Saved as draft, but the approver notification email could not be sent: ' + e.message, 'error');
   }
 }
 async function notifyFinanceOfApproval(record){
