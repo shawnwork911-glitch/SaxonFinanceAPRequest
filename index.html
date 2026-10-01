@@ -275,6 +275,17 @@
     background: var(--paper); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px;
     font-size: 12.5px; white-space: pre-wrap; max-height: 160px; overflow-y: auto; color: var(--sub);
   }
+  .comment-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; max-height: 280px; overflow-y: auto; }
+  .comment-item { background: var(--paper); border: 1px solid var(--line); border-radius: 6px; padding: 9px 12px; font-size: 13px; }
+  .comment-item.own { border-left: 3px solid var(--accent); }
+  .comment-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; font-size: 12px; color: var(--sub); margin-bottom: 4px; }
+  .comment-meta strong { color: var(--ink); font-weight: 600; font-size: 12.5px; }
+  .comment-role { font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--sub); }
+  .comment-text { white-space: pre-wrap; word-break: break-word; color: var(--ink); line-height: 1.45; }
+  .comment-empty { font-size: 12.5px; color: var(--sub); margin-bottom: 10px; }
+  .comment-compose textarea { min-height: 64px; }
+  .comment-compose .btn-row { margin-top: 8px; align-items: center; }
+  .comment-compose .field-hint { margin-right: auto; }
   .section-divider { border: none; border-top: 1px solid var(--line); margin: 16px 0; }
 
   #app-loading { display: none; padding: 60px 0; text-align: center; color: var(--sub); }
@@ -686,7 +697,9 @@
       Status, etc.) — see the setup message you were given alongside this
       file for the exact column list and types. Also add two columns for
       the Urgent Payment feature: IsUrgent (Yes/No) and
-      UrgentJustification (Multiple lines of text).
+      UrgentJustification (Multiple lines of text). For the comment box on
+      submitted requests, add a Comments column (Multiple lines of text,
+      plain text) — until it exists the box shows a setup note instead.
    3. Supporting documents upload to the "Finance Documents" folder inside
       the "Process Improvement" document library on this site (not the
       default "Documents" library) — that library must already exist;
@@ -843,7 +856,8 @@ const DATA_FIELD_MAP = {
   ApprovalDate: 'approvalDate', ApprovalComments: 'approvalComments',
   FinanceReviewer: 'financeReviewer', FinanceDecision: 'financeDecision',
   FinanceDecisionDate: 'financeDecisionDate', FinanceComments: 'financeComments',
-  PaymentReference: 'paymentReference', SubmittedDate: 'submittedDate', HistoryLog: 'historyLog'
+  PaymentReference: 'paymentReference', SubmittedDate: 'submittedDate', HistoryLog: 'historyLog',
+  Comments: 'comments' // JSON array of { at, by, name, text } — see commentsHtml()
 };
 
 let currentAccount = null;
@@ -1991,6 +2005,125 @@ function historyHtml(record){
 }
 
 /* ---------------------------------------------------------------------
+   Comments — a free-form thread on a submitted request, so the requester,
+   approver and Finance can leave feedback without changing its status.
+   Stored as a JSON array in the list's "Comments" column.
+   --------------------------------------------------------------------- */
+function parseComments(json){
+  try { const arr = JSON.parse(json || '[]'); return Array.isArray(arr) ? arr : []; } catch (e) { return []; }
+}
+function commentRoleLabel(record, email){
+  const e = (email || '').toLowerCase();
+  if (!e) return '';
+  if (e === (record.requestorEmail || '').toLowerCase()) return 'Requester';
+  if (e === (record.approverEmail || '').toLowerCase()) return 'Approver';
+  if (financeMembers.some(m => (m.email || '').toLowerCase() === e)) return 'Finance';
+  if (urgentApproverEmail && e === urgentApproverEmail.toLowerCase()) return 'Urgent approver';
+  if (Object.keys(deptApproverMap).some(d => (deptApproverMap[d].email || '').toLowerCase() === e)) return 'Approver';
+  return '';
+}
+function commentsInnerHtml(record){
+  const comments = parseComments(record.comments);
+  const me = myEmail();
+  const list = comments.length
+    ? '<div class="comment-list" id="comment-list">' + comments.map(c => {
+        const role = commentRoleLabel(record, c.by);
+        const own = (c.by || '').toLowerCase() === me;
+        return '<div class="comment-item' + (own ? ' own' : '') + '">' +
+          '<div class="comment-meta"><strong>' + escapeHtml(c.name || c.by || 'Unknown') + '</strong>' +
+          (role ? '<span class="comment-role">' + role + '</span>' : '') +
+          '<span>' + fmtDateTime(c.at) + '</span></div>' +
+          '<div class="comment-text">' + escapeHtml(c.text) + '</div></div>';
+      }).join('') + '</div>'
+    : '<div class="comment-empty">No comments yet. Use the box below to ask a question or leave feedback on this request.</div>';
+  const columnMissing = columnMapCache && !columnMapCache.Comments;
+  const compose = columnMissing
+    ? '<div class="field-hint">Comments are not set up yet — ask an admin to add a <strong>Comments</strong> column (Multiple lines of text) to the "' + escapeHtml(SP_LIST_NAME) + '" list.</div>'
+    : '<div class="comment-compose">' +
+        '<label class="field-label" for="comment-input">Add a comment</label>' +
+        '<textarea class="text-field" id="comment-input" placeholder="Write a comment or feedback for this request…" ' +
+          'onkeydown="if ((event.ctrlKey || event.metaKey) && event.key === \'Enter\') { event.preventDefault(); handlePostComment(\'' + record.id + '\'); }"></textarea>' +
+        '<div class="btn-row"><span class="field-hint">Visible to everyone on this request. Ctrl+Enter to post.</span>' +
+        '<button type="button" class="btn btn-primary" id="btn-post-comment" onclick="handlePostComment(\'' + record.id + '\')">Post comment</button></div>' +
+      '</div>';
+  return '<div class="k" style="margin-bottom:6px;">Comments' + (comments.length ? ' (' + comments.length + ')' : '') + '</div>' + list + compose;
+}
+function commentsSectionHtml(record){
+  if (!record.status || record.status === STATUS.DRAFT) return ''; // only once submitted
+  return '<hr class="section-divider"><div id="comments-section">' + commentsInnerHtml(record) + '</div>';
+}
+function scrollCommentsToEnd(){
+  const list = document.getElementById('comment-list');
+  if (list) list.scrollTop = list.scrollHeight;
+}
+async function handlePostComment(itemId){
+  const input = document.getElementById('comment-input');
+  const btn = document.getElementById('btn-post-comment');
+  const text = (input ? input.value : '').trim();
+  if (!text) { showToast('Write a comment before posting.', 'error'); if (input) input.focus(); return; }
+  setBusy(btn, true, 'Posting…');
+  try {
+    const colMap = await getColumnMap();
+    if (!colMap.Comments) throw new Error('the "Comments" column was not found on the list. Ask an admin to add it (Multiple lines of text).');
+    // Re-read the live item so a comment someone else just posted isn't overwritten.
+    const live = await fetchCurrentRecord(itemId);
+    const comments = parseComments(live.comments);
+    const entry = { at: nowIso(), by: currentAccount.username, name: currentAccount.name || currentAccount.username, text };
+    comments.push(entry);
+    const commentsJson = JSON.stringify(comments);
+    await updateRequestItem(itemId, { comments: commentsJson });
+    const cached = findRecord(itemId);
+    if (cached) cached.comments = commentsJson;
+    live.comments = commentsJson;
+    if (modalContext && modalContext.record && modalContext.record.id === itemId) {
+      modalContext.record.comments = commentsJson;
+      const section = document.getElementById('comments-section');
+      if (section) section.innerHTML = commentsInnerHtml(live);
+      scrollCommentsToEnd();
+    }
+    showToast('Comment posted.', 'success');
+    notifyOfNewComment(live, entry);
+  } catch (e) {
+    showToast('Could not post comment: ' + e.message, 'error');
+    setBusy(btn, false);
+    return;
+  }
+  if (btn.isConnected) { setBusy(btn, false); if (input) input.value = ''; }
+  else busyCount = Math.max(0, busyCount - 1); // button was replaced by the re-render
+}
+// Emails the other people on the request (requester, current approver, and Finance once
+// it's in their queue) so a comment doesn't sit unseen. Non-fatal if it fails.
+async function notifyOfNewComment(record, entry){
+  const me = myEmail();
+  const to = new Set();
+  if (record.requestorEmail) to.add(record.requestorEmail.toLowerCase());
+  if (record.approverEmail) to.add(record.approverEmail.toLowerCase());
+  if ([STATUS.PENDING_FINANCE, STATUS.PENDING_INFO, STATUS.PROCESSED].includes(record.status)) {
+    financeMembers.forEach(m => { if (m.email) to.add(m.email.toLowerCase()); });
+  }
+  parseComments(record.comments).forEach(c => { if (c.by) to.add(c.by.toLowerCase()); });
+  to.delete(me);
+  if (!to.size) return;
+  try {
+    const subject = '[AP Request] ' + record.requestId + ' — new comment from ' + (entry.name || entry.by);
+    const lines = [
+      escapeHtml(entry.name || entry.by) + ' commented on request ' + escapeHtml(record.requestId) + ':',
+      '',
+      '<div style="border-left:3px solid #1f4e79; padding:4px 10px; white-space:pre-wrap;">' + escapeHtml(entry.text) + '</div>',
+      '',
+      'Vendor: ' + escapeHtml(record.vendorName),
+      'Amount: ' + escapeHtml(fmtAmount(record.amount, record.currency)),
+      'Status: ' + escapeHtml(record.status),
+      '',
+      '<a href="' + escapeHtml(APP_URL) + '">Open the AP Request System</a> to read the thread and reply.'
+    ];
+    await sendGraphMail(Array.from(to), subject, lines);
+  } catch (e) {
+    showToast('Comment posted, but the notification email could not be sent: ' + e.message, 'error');
+  }
+}
+
+/* ---------------------------------------------------------------------
    Edit-draft form (lets a requester amend a saved draft in place,
    instead of having to delete it and start over on the New Request tab)
    --------------------------------------------------------------------- */
@@ -2169,7 +2302,7 @@ function renderModalBody(record, mode){
       '</div>';
   }
 
-  let html = baseDetailGrid(record) + approvalFinanceSummary(record) + historyHtml(record);
+  let html = baseDetailGrid(record) + approvalFinanceSummary(record) + historyHtml(record) + commentsSectionHtml(record);
 
   if (mode === 'approve') {
     html += '<hr class="section-divider">' +
