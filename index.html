@@ -422,10 +422,12 @@
         <div class="field-row">
           <label class="field-label">Currency <span class="req">*</span></label>
           <select class="text-field" id="f-currency">
+            <option value="" selected>-</option>
             <option value="SGD">SGD</option>
             <option value="MYR">MYR</option>
             <option value="EUR">EUR</option>
             <option value="USD">USD</option>
+            <option value="CNY">CNY</option>
           </select>
         </div>
       </div>
@@ -1553,7 +1555,7 @@ function clearNewRequestForm(){
     document.getElementById(id).value = '';
   });
   document.getElementById('f-department').value = defaultDepartmentForUser();
-  document.getElementById('f-currency').value = 'SGD';
+  document.getElementById('f-currency').value = '';
   document.getElementById('f-urgent').checked = false;
   document.getElementById('urgent-justification-row').style.display = 'none';
   newRequestFiles.length = 0;
@@ -2133,9 +2135,10 @@ function departmentOptionsHtml(selected){
   ).join('');
 }
 function currencyOptionsHtml(selected){
-  return ['SGD','MYR','EUR','USD'].map(c =>
-    '<option value="' + c + '"' + (c === selected ? ' selected' : '') + '>' + c + '</option>'
-  ).join('');
+  return '<option value=""' + (selected ? '' : ' selected') + '>-</option>' +
+    ['SGD','MYR','EUR','USD','CNY'].map(c =>
+      '<option value="' + c + '"' + (c === selected ? ' selected' : '') + '>' + c + '</option>'
+    ).join('');
 }
 function renderEditDocListInner(){
   const docs = modalContext.editDocs || [];
