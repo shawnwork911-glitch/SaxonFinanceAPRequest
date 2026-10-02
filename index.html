@@ -608,7 +608,7 @@
   <div class="view" id="view-admin">
     <div class="card" id="admin-list-warning" style="display:none; border-left: 3px solid var(--warn); background: var(--warn-bg);">
       <strong>The "AP System Roles" list wasn't found on this site.</strong>
-      <div class="field-hint" style="margin-top:6px;">Create a SharePoint list named exactly <code>AP System Roles</code> on the same site as your requests list, with columns: <code>RoleType</code> (Choice: "Department Approver", "Finance Team", "Urgent Payment Approver", "Requester Department"), <code>Department</code> (Choice: Digital Growth &amp; Branding/Strategic Partnerships &amp; Events/Operations/HR Admin — leave blank for Finance Team and Urgent Payment Approver rows), <code>Email</code> (Single line of text). Then click Recheck below.</div>
+      <div class="field-hint" style="margin-top:6px;">Create a SharePoint list named exactly <code>AP System Roles</code> on the same site as your requests list, with columns: <code>RoleType</code> (Choice: "Department Approver", "Finance Team", "Urgent Payment Approver", "Requester Department"), <code>Department</code> (Choice: Digital Growth &amp; Branding/Strategic Partnerships &amp; Events/Operations/HR Admin — leave blank for Finance Team rows; it is ignored on the Urgent Payment Approver row, which always covers every department), <code>Email</code> (Single line of text). Then click Recheck below.</div>
       <div class="btn-row" style="justify-content:flex-start; margin-top:10px;">
         <button type="button" class="btn btn-ghost" onclick="recheckRolesList()">Recheck</button>
       </div>
@@ -800,6 +800,10 @@ const DEPARTMENTS = {
   "Operations": { approverEmail: "operations.approver@saxonrenewables.com" },
   "HR Admin":   { approverEmail: "hr.approver@saxonrenewables.com" }
 };
+/* Shared Urgent Payment Approver fallback — used only when the "AP System Roles" list can't be
+   read for the signed-in user (e.g. no permission on the list) or has no Urgent Payment
+   Approver row. Leave "" to rely on the list only. */
+const URGENT_APPROVER_FALLBACK = "";
 const FINANCE_TEAM = [
   "finance1@saxonrenewables.com",
   "finance2@saxonrenewables.com"
@@ -883,6 +887,7 @@ let deptApproverMap = {};  // { "Digital Growth & Branding": { itemId, email }, 
 let financeMembers = [];   // [{ itemId, email }, ...]
 let urgentApproverEmail = ''; // single email — routes Urgent Payment requests, bypassing the dept approver
 let urgentApproverItemId = null;
+let rolesLoadError = ''; // why the roles list couldn't be read for this user, if it couldn't — shown in the urgent error
 let requesterDeptMap = []; // [{ itemId, email, department }, ...] — defaults a requester's New Request department, doesn't lock it
 const APP_URL = window.location.origin + window.location.pathname; // linked from notification emails so recipients can click straight into the app
 
@@ -916,6 +921,9 @@ function defaultDepartmentForUser(){
   const email = myEmail();
   const m = requesterDeptMap.find(r => (r.email || '').toLowerCase() === email);
   return m ? m.department : '';
+}
+function normalizeDept(d){
+  return String(d || '').replace(/&amp;/gi, '&').replace(/\s+/g, ' ').trim();
 }
 function isAdminUser(){
   const email = myEmail();
@@ -1017,7 +1025,8 @@ async function resolveRolesList(){
   try {
     const lists = await graphFetch("/sites/" + siteId + "/lists?$filter=displayName eq '" + encodeURIComponent(SP_ROLES_LIST_NAME) + "'");
     rolesListId = lists.value.length ? lists.value[0].id : null;
-  } catch (e) { rolesListId = null; }
+    rolesLoadError = rolesListId ? '' : 'the "' + SP_ROLES_LIST_NAME + '" list was not found or is not visible to your account';
+  } catch (e) { rolesListId = null; rolesLoadError = 'your account could not read the "' + SP_ROLES_LIST_NAME + '" list (' + e.message + ')'; }
 }
 async function getRolesColumnMap(){
   if (rolesColumnMapCache) return rolesColumnMapCache;
@@ -1036,6 +1045,7 @@ async function loadRolesConfig(){
   if (!rolesListId) {
     Object.keys(DEPARTMENTS).forEach(d => { deptApproverMap[d] = { itemId: null, email: DEPARTMENTS[d].approverEmail || '' }; });
     financeMembers = FINANCE_TEAM.map(e => ({ itemId: null, email: e }));
+    urgentApproverEmail = URGENT_APPROVER_FALLBACK || '';
     return;
   }
   const colMap = await getRolesColumnMap();
@@ -1047,18 +1057,25 @@ async function loadRolesConfig(){
     const f = item.fields;
     const roleType = colMap.RoleType ? f[colMap.RoleType] : '';
     const email = (colMap.Email ? f[colMap.Email] : '') || '';
-    const department = colMap.Department ? f[colMap.Department] : '';
+    const department = normalizeDept(colMap.Department ? f[colMap.Department] : '');
     if (roleType === 'Department Approver' && department) {
       deptApproverMap[department] = { itemId: item.id, email };
     } else if (roleType === 'Finance Team' && email) {
       financeMembers.push({ itemId: item.id, email });
     } else if (roleType === 'Urgent Payment Approver' && email) {
-      urgentApproverEmail = email;
-      urgentApproverItemId = item.id;
+      // One shared urgent approver for ALL departments. The Department column is ignored on this
+      // row — SharePoint fills a Choice column with its default (often "Digital Growth & Branding")
+      // when the app doesn't send one, so it must not restrict who this approver covers.
+      // If there are several rows, prefer the one with Department blank.
+      if (!urgentApproverItemId || !department) {
+        urgentApproverEmail = email;
+        urgentApproverItemId = item.id;
+      }
     } else if (roleType === 'Requester Department' && email && department) {
       requesterDeptMap.push({ itemId: item.id, email, department });
     }
   });
+  if (!urgentApproverEmail && URGENT_APPROVER_FALLBACK) urgentApproverEmail = URGENT_APPROVER_FALLBACK;
   // Departments with no row yet on the list fall back to the hardcoded default.
   Object.keys(DEPARTMENTS).forEach(d => {
     if (!deptApproverMap[d]) deptApproverMap[d] = { itemId: null, email: DEPARTMENTS[d].approverEmail || '' };
@@ -1207,7 +1224,8 @@ function renderAdminTab(){
       '<div style="flex:1;"><label class="field-label">Urgent Payment Approver</label>' +
       '<input class="text-field" id="admin-urgent-approver-email" value="' + escapeHtml(urgentApproverEmail) + '" placeholder="name@saxonrenewables.com"></div>' +
       '<button type="button" class="btn btn-primary" id="admin-urgent-approver-btn" onclick="saveUrgentApprover()">Save</button>' +
-    '</div>' + (urgentApproverEmail ? '' : '<div class="field-hint" style="margin-top:6px;">Not set yet — until an email is saved here, requesters cannot submit an Urgent Payment request.</div>');
+    '</div>' + (urgentApproverEmail ? '' : '<div class="field-hint" style="margin-top:6px;">Not set yet — until an email is saved here, requesters in any department cannot submit an Urgent Payment request.</div>') +
+      '<div class="field-hint" style="margin-top:6px;">This one approver covers all departments. Every requester also needs at least Read access to the "' + escapeHtml(SP_ROLES_LIST_NAME) + '" list, or the app can\'t see who the urgent approver is.</div>';
   }
   const financeEl = document.getElementById('admin-finance-body');
   if (financeEl) {
@@ -1586,8 +1604,20 @@ function validateNewRequestForm(form){
   if (!form.description) return 'Please describe the purpose of this request.';
   if (!newRequestFiles.length) return 'Please attach at least one supporting document.';
   if (form.isUrgent && !form.urgentJustification) return 'Please provide a justification for the urgent payment.';
-  if (form.isUrgent && !urgentApproverEmail) return 'No Urgent Payment Approver has been configured yet. Contact an admin (User Management tab) before submitting an urgent request.';
+  if (form.isUrgent && !urgentApproverEmail) return urgentNotSetMessage();
   return null;
+}
+function urgentNotSetMessage(){
+  return rolesLoadError
+    ? 'Urgent Payment could not be routed: ' + rolesLoadError + '. Ask an admin to give your account Read access to that SharePoint list, then sign in again.'
+    : 'No Urgent Payment Approver has been configured yet. Contact an admin (User Management tab) before submitting an urgent request.';
+}
+/* The urgent approver is loaded once at sign-in. If it's missing when someone submits an urgent
+   request (e.g. the admin saved it after this user signed in, or the first load failed),
+   re-read the roles list once before showing the error. */
+async function ensureUrgentApproverLoaded(isUrgent){
+  if (!isUrgent || urgentApproverEmail) return;
+  try { await resolveRolesList(); await loadRolesConfig(); setupRoleUI(); } catch (e) { rolesLoadError = rolesLoadError || ('could not load the "' + SP_ROLES_LIST_NAME + '" list (' + e.message + ')'); }
 }
 async function handleSaveDraft(){
   const btn = document.getElementById('btn-save-draft');
@@ -1619,6 +1649,7 @@ async function handleSaveDraft(){
 async function handleSubmitRequest(){
   const btn = document.getElementById('btn-submit-request');
   const form = readNewRequestForm();
+  await ensureUrgentApproverLoaded(form.isUrgent);
   const err = validateNewRequestForm(form);
   if (err) { showToast(err, 'error'); return; }
   setBusy(btn, true, 'Submitting…');
@@ -2250,7 +2281,7 @@ function validateEditDraftForm(form){
   const docCount = (modalContext.editDocs || []).length + (modalContext.editFiles || []).length;
   if (!docCount) return 'Please attach at least one supporting document.';
   if (form.isUrgent && !form.urgentJustification) return 'Please provide a justification for the urgent payment.';
-  if (form.isUrgent && !urgentApproverEmail) return 'No Urgent Payment Approver has been configured yet. Contact an admin (User Management tab) before submitting an urgent request.';
+  if (form.isUrgent && !urgentApproverEmail) return urgentNotSetMessage();
   return null;
 }
 async function handleSaveDraftEdits(itemId){
@@ -2352,6 +2383,7 @@ async function handleSubmitDraft(itemId){
   const record = findRecord(itemId);
   if (!record) return;
   const form = readEditDraftForm();
+  await ensureUrgentApproverLoaded(form.isUrgent);
   const err = validateEditDraftForm(form);
   if (err) { showToast(err, 'error'); return; }
   const btn = document.getElementById('btn-submit-draft');
@@ -2503,6 +2535,7 @@ async function handleResubmitEdits(itemId){
   const record = findRecord(itemId);
   if (!record) return;
   const form = readEditDraftForm();
+  await ensureUrgentApproverLoaded(form.isUrgent);
   const err = validateEditDraftForm(form);
   if (err) { showToast(err, 'error'); return; }
   if (!confirm('Save your changes and restart the approval process? Any existing approval on this request will be cleared.')) return;
