@@ -184,6 +184,7 @@
   }
   input.text-field:focus, select.text-field:focus, textarea.text-field:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
   textarea.text-field { resize: vertical; min-height: 70px; }
+  input.text-field[readonly] { opacity: .75; cursor: not-allowed; }
   .field-row { margin-bottom: 4px; }
   .field-hint { font-size: 11.5px; color: var(--sub); margin-top: 4px; }
 
@@ -475,12 +476,18 @@
         </div>
         <div class="field-row">
           <label class="field-label">Payment Terms <span class="req">*</span></label>
-          <select class="text-field" id="f-payment-terms"></select>
+          <select class="text-field" id="f-payment-terms" onchange="refreshDueDate('f')"></select>
           <div class="field-hint">Matches the payment terms codes in Business Central. Tip: click the list and type the code (e.g. INV30) to jump to it.</div>
         </div>
         <div class="field-row">
           <label class="field-label">Document Date</label>
-          <input class="text-field" type="date" id="f-invoice-date">
+          <input class="text-field" type="date" id="f-invoice-date" onchange="refreshDueDate('f')" oninput="refreshDueDate('f')">
+          <div class="field-hint">The invoice date. Used to calculate the due date automatically.</div>
+        </div>
+        <div class="field-row">
+          <label class="field-label">Due Date <span class="req">*</span></label>
+          <input class="text-field" type="date" id="f-due-date">
+          <div class="field-hint" id="f-due-hint">Select the payment terms first.</div>
         </div>
         <div class="field-row">
           <label class="field-label">Amount <span class="req">*</span></label>
@@ -488,7 +495,7 @@
         </div>
         <div class="field-row">
           <label class="field-label">Currency <span class="req">*</span></label>
-          <select class="text-field" id="f-currency">
+          <select class="text-field" id="f-currency" onchange="refreshDueDate('f')">
             <option value="" selected>-</option>
             <option value="SGD">SGD</option>
             <option value="MYR">MYR</option>
@@ -550,7 +557,7 @@
         </div>
       </div>
       <table class="data-table">
-        <thead><tr><th>Document Number</th><th>Department</th><th>Vendor</th><th>Amount</th><th>Status</th><th>Submitted</th></tr></thead>
+        <thead><tr><th>Document Number</th><th>Department</th><th>Vendor</th><th>Amount</th><th>Status</th><th>Due Date</th></tr></thead>
         <tbody id="mine-table-body"></tbody>
       </table>
     </div>
@@ -573,7 +580,7 @@
         </div>
       </div>
       <table class="data-table">
-        <thead><tr><th>Document Number</th><th>Department</th><th>Requestor</th><th>Vendor</th><th>Amount</th><th>Submitted</th></tr></thead>
+        <thead><tr><th>Document Number</th><th>Department</th><th>Requestor</th><th>Vendor</th><th>Amount</th><th>Due Date</th></tr></thead>
         <tbody id="approvals-table-body"></tbody>
       </table>
     </div>
@@ -889,6 +896,177 @@ function paymentTermOptionsHtml(selected){
     html += '<optgroup label="Current value (not in list)"><option value="' + escapeHtml(selected) + '" selected>' + escapeHtml(selected) + '</option></optgroup>';
   }
   return html;
+}
+
+/* ---------------------------------------------------------------------
+   Due date
+   - "Calendar days" and "Days after invoice date" terms: Document Date + N calendar days.
+   - "Business days after invoice date" terms: Document Date + N working days — Mon–Fri,
+     skipping the public holidays in PUBLIC_HOLIDAYS below. MYR requests use the Malaysia
+     (Selangor) calendar; every other currency uses the Singapore calendar.
+   - Every other term (delivery-based, advance / down payment, legacy free text): the
+     requester enters the due date by hand.
+   --------------------------------------------------------------------- */
+/* Public holidays that fall on a weekday (incl. in-lieu / replacement days), 'YYYY-MM-DD'.
+   Weekend holidays are left out because weekends are skipped anyway.
+   UPDATE EACH YEAR: add the new year's dates once MOM (Singapore) and JPM/BKPP (Malaysia)
+   publish them, and correct any Islamic holiday whose date moves after moon sighting. */
+const PUBLIC_HOLIDAYS = {
+  SG: {
+    label: 'Singapore',
+    dates: [
+      // 2026 (MOM)
+      '2026-01-01', // New Year's Day
+      '2026-02-17', '2026-02-18', // Chinese New Year
+      '2026-04-03', // Good Friday
+      '2026-05-01', // Labour Day
+      '2026-05-27', // Hari Raya Haji
+      '2026-06-01', // Vesak Day (in lieu of Sun 31 May)
+      '2026-08-10', // National Day (in lieu of Sun 9 Aug)
+      '2026-11-09', // Deepavali (in lieu of Sun 8 Nov)
+      '2026-12-25', // Christmas Day
+      // 2027 (MOM)
+      '2027-01-01', // New Year's Day
+      '2027-02-08', // Chinese New Year (in lieu of Sun 7 Feb)
+      '2027-03-10', // Hari Raya Puasa
+      '2027-03-26', // Good Friday
+      '2027-05-17', // Hari Raya Haji
+      '2027-05-20', // Vesak Day
+      '2027-08-09', // National Day
+      '2027-10-28'  // Deepavali
+    ]
+  },
+  MY: {
+    label: 'Malaysia (Selangor)',
+    dates: [
+      // 2026 — federal + Selangor state holidays
+      '2026-01-01', // New Year's Day
+      '2026-02-02', // Thaipusam (replacement for Sun 1 Feb)
+      '2026-02-17', '2026-02-18', // Chinese New Year
+      '2026-03-20', // Hari Raya Aidilfitri additional holiday
+      '2026-03-23', // Hari Raya Aidilfitri (replacement for Sun 22 Mar)
+      '2026-05-01', // Labour Day
+      '2026-05-27', // Hari Raya Haji
+      '2026-06-01', // Agong's Birthday
+      '2026-06-02', // Wesak Day (replacement for Sun 31 May)
+      '2026-06-17', // Awal Muharram
+      '2026-08-25', // Prophet Muhammad's Birthday
+      '2026-08-31', // National Day
+      '2026-09-01', // Selangor special holiday (SUKMA 2026)
+      '2026-09-16', // Malaysia Day
+      '2026-10-26', // Selangor special holiday (Sultan's Silver Jubilee, replacement for Sun 25 Oct)
+      '2026-11-09', // Deepavali (replacement for Sun 8 Nov)
+      '2026-12-11', // Sultan of Selangor's Birthday
+      '2026-12-25', // Christmas Day
+      // 2027 — federal + Selangor state holidays
+      '2027-01-01', // New Year's Day
+      '2027-01-22', // Thaipusam
+      '2027-02-08', // Chinese New Year (replacement for Sun 7 Feb)
+      '2027-02-24', // Nuzul Al-Quran
+      '2027-03-10', '2027-03-11', // Hari Raya Puasa
+      '2027-05-17', // Hari Raya Qurban
+      '2027-05-20', // Wesak Day
+      '2027-06-07', // Agong's Birthday
+      '2027-06-08', // Awal Muharram (replacement for Sun 6 Jun)
+      '2027-08-16', // Prophet Muhammad's Birthday (replacement for Sun 15 Aug)
+      '2027-08-31', // National Day
+      '2027-09-16', // Malaysia Day
+      '2027-10-28'  // Deepavali
+    ]
+  }
+};
+Object.values(PUBLIC_HOLIDAYS).forEach(c => { c.set = new Set(c.dates); c.years = new Set(c.dates.map(d => d.slice(0, 4))); });
+function holidayCalendarFor(currency){ return currency === 'MYR' ? PUBLIC_HOLIDAYS.MY : PUBLIC_HOLIDAYS.SG; }
+
+const AUTO_DUE_GROUPS = { 'Calendar days': 'calendar', 'Days after invoice date': 'calendar', 'Business days after invoice date': 'business' };
+function dueDateRule(termLabel){
+  if (!termLabel) return null;
+  for (const g of PAYMENT_TERM_GROUPS) {
+    const kind = AUTO_DUE_GROUPS[g.group];
+    if (!kind) continue;
+    const t = g.terms.find(t => paymentTermLabel(t) === termLabel);
+    if (t) {
+      const days = parseInt(t.desc, 10); // desc always starts with the number, e.g. "30 DAYS AFTER INVOICE DATE"
+      if (!isNaN(days)) return { kind, days };
+    }
+  }
+  return null; // manual entry
+}
+// docDate: 'YYYY-MM-DD' (date input value). Returns 'YYYY-MM-DD' or ''.
+function calcDueDate(termLabel, docDate, currency){
+  const rule = dueDateRule(termLabel);
+  if (!rule || !/^\d{4}-\d{2}-\d{2}$/.test(docDate || '')) return '';
+  const [y, m, d] = docDate.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  if (rule.kind === 'calendar') {
+    dt.setUTCDate(dt.getUTCDate() + rule.days);
+  } else {
+    const hol = holidayCalendarFor(currency).set;
+    let added = 0;
+    while (added < rule.days) {
+      dt.setUTCDate(dt.getUTCDate() + 1);
+      const wd = dt.getUTCDay();
+      if (wd !== 0 && wd !== 6 && !hol.has(dt.toISOString().slice(0, 10))) added++;
+    }
+  }
+  return dt.toISOString().slice(0, 10);
+}
+function dueDateHintText(rule, docDate, currency, dueDate){
+  if (!rule) return 'This payment term isn\u2019t calculated automatically \u2014 please enter the due date.';
+  if (!docDate) return 'Enter the Document Date and the due date will be calculated automatically.';
+  if (rule.kind !== 'business') return 'Calculated automatically: ' + rule.days + ' days after the document date.';
+  const cal = holidayCalendarFor(currency);
+  let txt = 'Calculated automatically: ' + rule.days + ' business days after the document date (Mon\u2013Fri, excluding ' + cal.label + ' public holidays).';
+  const missing = [docDate.slice(0, 4), (dueDate || '').slice(0, 4)].filter((y, i, a) => y && a.indexOf(y) === i && !cal.years.has(y));
+  if (missing.length) txt += ' Note: no ' + cal.label + ' holiday list for ' + missing.join(', ') + ' yet, so holidays in that year are not skipped.';
+  return txt;
+}
+// prefix 'f' = New Request form, 'ed' = edit modal.
+function refreshDueDate(prefix){
+  const termEl = document.getElementById(prefix + '-payment-terms');
+  const docEl = document.getElementById(prefix + '-invoice-date');
+  const dueEl = document.getElementById(prefix + '-due-date');
+  const hintEl = document.getElementById(prefix + '-due-hint');
+  const curEl = document.getElementById(prefix + '-currency');
+  const currency = curEl ? curEl.value : '';
+  if (!termEl || !docEl || !dueEl) return;
+  const term = termEl.value;
+  const rule = dueDateRule(term);
+  if (!term) {
+    if (dueEl.dataset.auto === '1') dueEl.value = '';
+    dueEl.dataset.auto = '0';
+    dueEl.readOnly = false;
+    if (hintEl) hintEl.textContent = 'Select the payment terms first.';
+    return;
+  }
+  if (rule) {
+    dueEl.value = calcDueDate(term, docEl.value, currency);
+    dueEl.dataset.auto = '1';
+    dueEl.readOnly = true;
+  } else {
+    if (dueEl.dataset.auto === '1') dueEl.value = ''; // don't keep a stale auto value for a manual term
+    dueEl.dataset.auto = '0';
+    dueEl.readOnly = false;
+  }
+  if (hintEl) hintEl.textContent = dueDateHintText(rule, docEl.value, currency, dueEl.value);
+}
+// Initial HTML for the edit modal's Due Date field (inline handlers can't run on render).
+function dueDateFieldHtml(prefix, record){
+  const term = record.paymentTerms || '';
+  const docDate = toDateInputValue(record.invoiceDate);
+  const rule = dueDateRule(term);
+  const value = rule ? calcDueDate(term, docDate, record.currency) : toDateInputValue(record.dueDate);
+  const hint = term ? dueDateHintText(rule, docDate, record.currency, value) : 'Select the payment terms first.';
+  return '<div class="field-row"><label class="field-label">Due Date <span class="req">*</span></label>' +
+    '<input class="text-field" type="date" id="' + prefix + '-due-date" value="' + value + '" data-auto="' + (rule ? '1' : '0') + '"' + (rule ? ' readonly' : '') + '>' +
+    '<div class="field-hint" id="' + prefix + '-due-hint">' + escapeHtml(hint) + '</div></div>';
+}
+function dateInputToIso(v){ return v ? new Date(v).toISOString() : ''; }
+function validateDueDate(form, docDateRaw){
+  const rule = dueDateRule(form.paymentTerms);
+  if (rule && !docDateRaw) return 'Please enter the Document Date so the due date can be calculated.';
+  if (!form.dueDate) return 'Please enter the due date.';
+  return null;
 }
 
 const SP_ROLES_LIST_NAME = "AP System Roles";            // second SharePoint list — holds department approvers + Finance team, editable from the User Management tab
@@ -1653,6 +1831,7 @@ async function snapshotFiles(fileList){
   return out;
 }
 document.getElementById('f-payment-terms').innerHTML = paymentTermOptionsHtml('');
+refreshDueDate('f');
 document.getElementById('f-files').addEventListener('change', async (e) => {
   const picked = await snapshotFiles(e.target.files);
   e.target.value = '';
@@ -1672,7 +1851,7 @@ function toggleUrgentJustification(){
 }
 function clearNewRequestForm(){
   document.getElementById('f-payment-terms').innerHTML = paymentTermOptionsHtml('');
-  ['f-vendor','f-invoice-number','f-invoice-date','f-amount','f-description','f-urgent-justification'].forEach(id => {
+  ['f-vendor','f-invoice-number','f-invoice-date','f-due-date','f-amount','f-description','f-urgent-justification'].forEach(id => {
     document.getElementById(id).value = '';
   });
   document.getElementById('f-department').value = defaultDepartmentForUser();
@@ -1682,6 +1861,7 @@ function clearNewRequestForm(){
   newRequestFiles.length = 0;
   pendingNewRequestId = null;
   renderNewFileChips();
+  refreshDueDate('f');
 }
 function readNewRequestForm(){
   return {
@@ -1690,6 +1870,7 @@ function readNewRequestForm(){
     invoiceNumber: document.getElementById('f-invoice-number').value.trim(),
     paymentTerms: document.getElementById('f-payment-terms').value.trim(),
     invoiceDate: document.getElementById('f-invoice-date').value ? new Date(document.getElementById('f-invoice-date').value).toISOString() : '',
+    dueDate: dateInputToIso(document.getElementById('f-due-date').value),
     amount: parseFloat(document.getElementById('f-amount').value || '0'),
     currency: document.getElementById('f-currency').value,
     description: document.getElementById('f-description').value.trim(),
@@ -1702,6 +1883,8 @@ function validateNewRequestForm(form){
   if (!form.vendorName) return 'Please enter the vendor name.';
   if (!form.invoiceNumber) return 'Please enter the document number.';
   if (!form.paymentTerms) return 'Please select the payment terms.';
+  const dueErr = validateDueDate(form, document.getElementById('f-invoice-date').value);
+  if (dueErr) return dueErr;
   if (!form.currency) return 'Please select a currency.';
   if (!form.amount || form.amount <= 0) return 'Please enter an amount greater than zero.';
   if (!form.description) return 'Please describe the purpose of this request.';
@@ -1825,7 +2008,7 @@ function renderMineTable(){
   body.innerHTML = rows.length ? rows.map(r =>
     '<tr' + urgentRowAttr(r) + ' onclick="openDetail(\'' + r.id + '\',\'mine\')"><td>' + escapeHtml(r.invoiceNumber || '—') + urgentTag(r) + '</td><td>' + escapeHtml(r.department) +
     '</td><td>' + escapeHtml(r.vendorName) + '</td><td>' + fmtAmount(r.amount, r.currency) +
-    '</td><td>' + statusPill(r.status) + '</td><td>' + (r.status === STATUS.DRAFT ? '<span class="muted">draft</span>' : fmtDateTime(r.submittedDate)) + '</td></tr>'
+    '</td><td>' + statusPill(r.status) + '</td><td>' + fmtDate(r.dueDate) + '</td></tr>'
   ).join('') : '<tr class="empty-row"><td colspan="6">No requests yet.</td></tr>';
 
   const drafts = mine.filter(r => r.status === STATUS.DRAFT);
@@ -1854,7 +2037,7 @@ function renderApprovalsTable(){
   document.getElementById('approvals-table-body').innerHTML = pending.length ? pending.map(r =>
     '<tr' + urgentRowAttr(r) + ' onclick="openDetail(\'' + r.id + '\',\'approve\')"><td>' + escapeHtml(r.invoiceNumber || '—') + urgentTag(r) + '</td><td>' + escapeHtml(r.department) +
     '</td><td>' + escapeHtml(r.requestorName) + '</td><td>' + escapeHtml(r.vendorName) + '</td><td>' + fmtAmount(r.amount, r.currency) +
-    '</td><td>' + fmtDateTime(r.submittedDate) + '</td></tr>'
+    '</td><td>' + fmtDate(r.dueDate) + '</td></tr>'
   ).join('') : '<tr class="empty-row"><td colspan="6">Nothing waiting on your approval.</td></tr>';
   document.getElementById('approvals-history-body').innerHTML = decided.length ? decided.slice(0, 50).map(r =>
     '<tr' + urgentRowAttr(r) + ' onclick="openDetail(\'' + r.id + '\',\'mine\')"><td>' + escapeHtml(r.invoiceNumber || '—') + urgentTag(r) + '</td><td>' + escapeHtml(r.department) +
@@ -2347,6 +2530,7 @@ function baseDetailGrid(record){
       '<div><div class="k">Vendor</div>' + escapeHtml(record.vendorName) + '</div>' +
       '<div><div class="k">Document number</div>' + escapeHtml(record.invoiceNumber || '—') + '</div>' +
       '<div><div class="k">Document date</div>' + fmtDate(record.invoiceDate) + '</div>' +
+      '<div><div class="k">Due date</div>' + fmtDate(record.dueDate) + '</div>' +
       '<div><div class="k">Amount</div>' + fmtAmount(record.amount, record.currency) + '</div>' +
       '<div><div class="k">Payment terms</div>' + escapeHtml(record.paymentTerms || '—') + '</div>' +
       urgentRow +
@@ -2570,13 +2754,14 @@ function renderEditDraftForm(record, introHtml){
       '<div class="field-row"><label class="field-label">Document Number <span class="req">*</span></label>' +
         '<input class="text-field" type="text" id="ed-invoice-number" value="' + escapeHtml(record.invoiceNumber) + '"></div>' +
       '<div class="field-row"><label class="field-label">Payment Terms <span class="req">*</span></label>' +
-        '<select class="text-field" id="ed-payment-terms">' + paymentTermOptionsHtml(record.paymentTerms) + '</select></div>' +
+        '<select class="text-field" id="ed-payment-terms" onchange="refreshDueDate(\'ed\')">' + paymentTermOptionsHtml(record.paymentTerms) + '</select></div>' +
       '<div class="field-row"><label class="field-label">Document Date</label>' +
-        '<input class="text-field" type="date" id="ed-invoice-date" value="' + toDateInputValue(record.invoiceDate) + '"></div>' +
+        '<input class="text-field" type="date" id="ed-invoice-date" value="' + toDateInputValue(record.invoiceDate) + '" onchange="refreshDueDate(\'ed\')" oninput="refreshDueDate(\'ed\')"></div>' +
+      dueDateFieldHtml('ed', record) +
       '<div class="field-row"><label class="field-label">Amount <span class="req">*</span></label>' +
         '<input class="text-field" type="number" step="0.01" min="0" id="ed-amount" value="' + (record.amount || '') + '"></div>' +
       '<div class="field-row"><label class="field-label">Currency <span class="req">*</span></label>' +
-        '<select class="text-field" id="ed-currency">' + currencyOptionsHtml(record.currency) + '</select></div>' +
+        '<select class="text-field" id="ed-currency" onchange="refreshDueDate(\'ed\')">' + currencyOptionsHtml(record.currency) + '</select></div>' +
     '</div>' +
     '<div class="field-row" style="margin-top:14px; display:flex; align-items:center; gap:8px;">' +
       '<input type="checkbox" id="ed-urgent" onchange="toggleEditUrgentJustification()"' + (urgentChecked ? ' checked' : '') + ' style="width:16px; height:16px;">' +
@@ -2604,6 +2789,7 @@ function readEditDraftForm(){
     invoiceNumber: document.getElementById('ed-invoice-number').value.trim(),
     paymentTerms: document.getElementById('ed-payment-terms').value.trim(),
     invoiceDate: document.getElementById('ed-invoice-date').value ? new Date(document.getElementById('ed-invoice-date').value).toISOString() : '',
+    dueDate: dateInputToIso(document.getElementById('ed-due-date').value),
     amount: parseFloat(document.getElementById('ed-amount').value || '0'),
     currency: document.getElementById('ed-currency').value,
     description: document.getElementById('ed-description').value.trim(),
@@ -2616,6 +2802,8 @@ function validateEditDraftForm(form){
   if (!form.vendorName) return 'Please enter the vendor name.';
   if (!form.invoiceNumber) return 'Please enter the document number.';
   if (!form.paymentTerms) return 'Please select the payment terms.';
+  const dueErr = validateDueDate(form, document.getElementById('ed-invoice-date').value);
+  if (dueErr) return dueErr;
   if (!form.currency) return 'Please select a currency.';
   if (!form.amount || form.amount <= 0) return 'Please enter an amount greater than zero.';
   if (!form.description) return 'Please describe the purpose of this request.';
@@ -2782,13 +2970,13 @@ async function fetchCurrentRecord(itemId){
 }
 function describeEdits(before, form, docsBefore, docsAfter){
   const labels = { department: 'Department', vendorName: 'Vendor', invoiceNumber: 'Document number', paymentTerms: 'Payment terms',
-    invoiceDate: 'Document date', amount: 'Amount', currency: 'Currency', description: 'Description', isUrgent: 'Urgent payment',
+    invoiceDate: 'Document date', dueDate: 'Due date', amount: 'Amount', currency: 'Currency', description: 'Description', isUrgent: 'Urgent payment',
     urgentJustification: 'Urgent justification' };
   const changed = [];
   Object.keys(labels).forEach(k => {
     let a = before[k], b = form[k];
     if (k === 'amount') { a = Number(a || 0); b = Number(b || 0); }
-    else if (k === 'invoiceDate') { a = toDateInputValue(a); b = toDateInputValue(b); }
+    else if (k === 'invoiceDate' || k === 'dueDate') { a = toDateInputValue(a); b = toDateInputValue(b); }
     else if (k === 'isUrgent') { a = !!a; b = !!b; }
     else { a = (a || '').toString().trim(); b = (b || '').toString().trim(); }
     if (a !== b) changed.push(labels[k]);
