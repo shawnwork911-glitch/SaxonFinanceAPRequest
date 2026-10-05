@@ -334,6 +334,53 @@
   .step .step-label { font-size: 11.5px; font-weight: 600; color: var(--ink); }
   .step .step-date { font-size: 10.5px; color: var(--sub); margin-top: 2px; }
 
+  /* ---- Request Timeline: Gantt / List toggle ---- */
+  .view-toggle {
+    display: inline-flex; gap: 2px; padding: 3px; background: var(--paper);
+    border: 1px solid var(--line); border-radius: 7px;
+  }
+  .view-toggle button {
+    font-size: 12.5px; font-weight: 600; color: var(--sub); background: transparent;
+    border: none; border-radius: 5px; padding: 5px 12px; cursor: pointer; font-family: inherit;
+  }
+  .view-toggle button:hover { color: var(--ink); }
+  .view-toggle button.active { background: var(--panel); color: var(--ink); box-shadow: 0 0 0 1px var(--line); }
+  .view-toggle button:focus-visible, .gantt-row:focus-visible, .timeline-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .gantt-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 2px 0 14px; font-size: 12px; color: var(--sub); }
+  .gantt-legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .gantt-legend i { width: 18px; height: 9px; border-radius: 3px; display: inline-block; }
+  .gantt-legend i.ongoing { background-image: repeating-linear-gradient(135deg, rgba(255,255,255,.35) 0 3px, transparent 3px 6px); }
+  .gantt-legend i.dot { width: 9px; height: 9px; border-radius: 50%; }
+
+  .gantt-scroll { overflow-x: auto; }
+  .gantt { min-width: 760px; }
+  .gantt-head, .gantt-row { display: grid; grid-template-columns: 230px 1fr; }
+  .gantt-label-col, .gantt-label { position: sticky; left: 0; background: var(--panel); z-index: 2; padding-right: 14px; }
+  .gantt-axis { position: relative; height: 26px; border-bottom: 1px solid var(--line); }
+  .gantt-tick { position: absolute; bottom: 6px; transform: translateX(-50%); font-size: 11px; color: var(--sub); white-space: nowrap; }
+  .gantt-tick.today { color: var(--ink); font-weight: 700; }
+  .gantt-row { cursor: pointer; border-bottom: 1px solid var(--line); }
+  .gantt-row:hover .gantt-label, .gantt-row:hover .gantt-track { background: var(--accent-light); }
+  .gantt-label { padding-top: 8px; padding-bottom: 8px; min-width: 0; }
+  .gantt-label .inv { font-size: 13px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .gantt-label .ven { font-size: 12.5px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .gantt-label .meta { font-size: 11.5px; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .gantt-track { position: relative; min-height: 62px; }
+  .gantt-grid { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--line); opacity: .6; }
+  .gantt-now { position: absolute; top: 0; bottom: 0; width: 0; border-left: 2px dashed var(--sub); opacity: .7; z-index: 1; }
+  .gantt-bar {
+    position: absolute; top: 50%; height: 18px; transform: translateY(-50%); min-width: 6px;
+    display: flex; border-radius: 4px; overflow: hidden; z-index: 1;
+  }
+  .gantt-seg { height: 100%; flex-shrink: 0; }
+  .gantt-seg.ongoing { background-image: repeating-linear-gradient(135deg, rgba(255,255,255,.28) 0 5px, transparent 5px 10px); }
+  .gantt-end {
+    position: absolute; top: 50%; width: 12px; height: 12px; border-radius: 50%;
+    transform: translate(-50%, -50%); border: 2px solid var(--panel); z-index: 2;
+  }
+  @media (max-width: 720px) { .gantt-head, .gantt-row { grid-template-columns: 160px 1fr; } }
+
   @media print { #top-bar, #tabs, .toolbar-row, .btn-row, #modal-overlay, #chart-tooltip, #theme-toggle-btn { display: none !important; } }
 </style>
 </head>
@@ -594,6 +641,10 @@
       <div class="toolbar-row">
         <h2 style="margin:0;">Request Timeline</h2>
         <div class="filters">
+          <div class="view-toggle" role="group" aria-label="Timeline view">
+            <button type="button" data-mode="gantt" aria-pressed="false" onclick="setAnalyticsTimelineMode('gantt')">Gantt</button>
+            <button type="button" data-mode="list" aria-pressed="false" onclick="setAnalyticsTimelineMode('list')">List</button>
+          </div>
           <select class="filter-select" id="analytics-timeline-filter" onchange="renderAnalyticsTimeline()">
             <option value="">All statuses</option>
           </select>
@@ -1936,9 +1987,160 @@ function renderAnalyticsTimeline(){
   if (filterVal) scope = scope.filter(r => r.status === filterVal);
   scope.sort((a, b) => (b.submittedDate || '').localeCompare(a.submittedDate || ''));
   scope = scope.slice(0, 50);
-  document.getElementById('analytics-timeline-list').innerHTML = scope.length
-    ? scope.map(renderTimelineRow).join('')
-    : '<div class="muted small" style="padding:20px 0;">No submitted requests yet.</div>';
+  syncAnalyticsTimelineToggle();
+  const host = document.getElementById('analytics-timeline-list');
+  if (!scope.length) {
+    host.innerHTML = '<div class="muted small" style="padding:20px 0;">No submitted requests yet.</div>';
+    return;
+  }
+  host.innerHTML = analyticsTimelineMode === 'gantt'
+    ? renderGanttChart(scope)
+    : scope.map(renderTimelineRow).join('');
+}
+
+/* ---- Request Timeline: Gantt view ----
+   Each request is one row. Its bar runs from submission to its final decision
+   (or to now, if it's still open), split into the stages it has been through.
+   Stage colours match STATUS_COLOR_VAR so the chart reads like the status pills. */
+var analyticsTimelineMode = (function(){
+  try { return localStorage.getItem('apTimelineMode') === 'list' ? 'list' : 'gantt'; } catch (e) { return 'gantt'; }
+})();
+function setAnalyticsTimelineMode(mode){
+  analyticsTimelineMode = mode === 'list' ? 'list' : 'gantt';
+  try { localStorage.setItem('apTimelineMode', analyticsTimelineMode); } catch (e) {}
+  renderAnalyticsTimeline();
+}
+function syncAnalyticsTimelineToggle(){
+  document.querySelectorAll('#analytics-sub-timeline .view-toggle button').forEach(b => {
+    const on = b.dataset.mode === analyticsTimelineMode;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+}
+const GANTT_PHASE = {
+  approval: { label: 'Department approval', color: 'var(--warn)' },
+  finance:  { label: 'Finance review',      color: 'var(--accent)' },
+  info:     { label: 'Waiting for more info from requester', color: 'var(--info)' },
+  rejected: { label: 'Rejected at department approval',      color: 'var(--bad)' }
+};
+const DAY_MS = 86400000;
+function fmtSpan(ms){
+  if (ms < 3600000) return '<1h';
+  if (ms < DAY_MS) return Math.round(ms / 3600000) + 'h';
+  const d = ms / DAY_MS;
+  return (d < 10 ? (Math.round(d * 10) / 10) : Math.round(d)) + 'd';
+}
+function buildGanttSegments(r, nowMs){
+  const t0 = Date.parse(r.submittedDate);
+  if (isNaN(t0)) return null;
+  const appr = Date.parse(r.approvalDate);
+  const fin = Date.parse(r.financeDecisionDate);
+  const segs = [];
+  const add = (phase, a, b, ongoing) => segs.push({ phase, start: a, end: Math.max(a, b), ongoing: !!ongoing });
+  let endMark = null;
+  if (r.status === STATUS.PENDING_APPROVAL) {
+    add('approval', t0, nowMs, true);
+  } else if (r.status === STATUS.REJECTED_APPROVER) {
+    add('rejected', t0, isNaN(appr) ? t0 : appr);
+    endMark = 'var(--bad)';
+  } else {
+    const aEnd = isNaN(appr) ? t0 : appr;
+    add('approval', t0, aEnd);
+    if (r.status === STATUS.PROCESSED) {
+      add('finance', aEnd, isNaN(fin) ? aEnd : fin);
+      endMark = 'var(--good)';
+    } else if (r.status === STATUS.PENDING_INFO) {
+      const fEnd = isNaN(fin) ? aEnd : Math.max(aEnd, fin);
+      add('finance', aEnd, fEnd);
+      add('info', fEnd, nowMs, true);
+    } else {
+      add('finance', aEnd, nowMs, true);
+    }
+  }
+  return { start: t0, end: segs[segs.length - 1].end, segs, endMark, ongoing: segs[segs.length - 1].ongoing };
+}
+function ganttTicks(minMs, maxMs){
+  const spanDays = (maxMs - minMs) / DAY_MS;
+  const steps = [1, 2, 3, 7, 14, 30, 61, 91, 182, 365];
+  const step = steps.find(s => spanDays / s <= 8) || 365;
+  const first = new Date(minMs); first.setHours(0, 0, 0, 0);
+  if (first.getTime() < minMs) first.setDate(first.getDate() + 1);
+  const ticks = [];
+  for (let d = new Date(first); d.getTime() <= maxMs; d.setDate(d.getDate() + step)) ticks.push(d.getTime());
+  return ticks;
+}
+function renderGanttChart(scope){
+  const nowMs = Date.now();
+  const rows = scope.map(r => ({ r, g: buildGanttSegments(r, nowMs) })).filter(x => x.g);
+  if (!rows.length) return '<div class="muted small" style="padding:20px 0;">None of these requests have a submission date yet.</div>';
+  rows.sort((a, b) => a.g.start - b.g.start); // oldest at the top, like a schedule
+
+  let minMs = Math.min(...rows.map(x => x.g.start));
+  let maxMs = Math.max(nowMs, ...rows.map(x => x.g.end));
+  const pad = Math.max((maxMs - minMs) * 0.03, DAY_MS / 2);
+  minMs -= pad; maxMs += pad;
+  const pct = t => ((t - minMs) / (maxMs - minMs) * 100).toFixed(3) + '%';
+  const ticks = ganttTicks(minMs, maxMs);
+  const showYear = new Date(minMs).getFullYear() !== new Date(maxMs).getFullYear();
+  const tickFmt = t => new Date(t).toLocaleDateString('en-SG', showYear ? { day: 'numeric', month: 'short', year: '2-digit' } : { day: 'numeric', month: 'short' });
+  const gridHtml = ticks.map(t => '<div class="gantt-grid" style="left:' + pct(t) + '"></div>').join('') +
+    '<div class="gantt-now" style="left:' + pct(nowMs) + '"></div>';
+
+  // Hide a date tick that would collide with the "Today" label.
+  const nowFrac = (nowMs - minMs) / (maxMs - minMs);
+  const axisHtml = ticks.filter(t => { const f = (t - minMs) / (maxMs - minMs); return f > 0.04 && Math.abs(f - nowFrac) > 0.06; })
+    .map(t => '<div class="gantt-tick" style="left:' + pct(t) + '">' + escapeHtml(tickFmt(t)) + '</div>').join('') +
+    '<div class="gantt-tick today" style="left:' + pct(nowMs) + '">Today</div>';
+
+  const used = new Set();
+  rows.forEach(x => x.g.segs.forEach(s => used.add(s.phase)));
+  const hasOngoing = rows.some(x => x.g.ongoing);
+  const hasDone = rows.some(x => x.g.endMark === 'var(--good)');
+  const legendHtml = '<div class="gantt-legend">' +
+    Object.keys(GANTT_PHASE).filter(k => used.has(k)).map(k =>
+      '<span><i style="background:' + GANTT_PHASE[k].color + '"></i>' + escapeHtml(GANTT_PHASE[k].label) + '</span>').join('') +
+    (hasOngoing ? '<span><i class="ongoing" style="background-color:var(--sub)"></i>Still in progress</span>' : '') +
+    (hasDone ? '<span><i class="dot" style="background:var(--good)"></i>Processed</span>' : '') +
+  '</div>';
+
+  const rowsHtml = rows.map(({ r, g }) => {
+    const total = g.end - g.start;
+    const segHtml = g.segs.map(s => {
+      const w = total > 0 ? ((s.end - s.start) / total * 100) : (100 / g.segs.length);
+      const tip = GANTT_PHASE[s.phase].label + ': ' + fmtDateTime(new Date(s.start).toISOString()) + ' to ' +
+        (s.ongoing ? 'now' : fmtDateTime(new Date(s.end).toISOString())) + ' (' + fmtSpan(s.end - s.start) + (s.ongoing ? ' so far' : '') + ')';
+      return '<div class="gantt-seg' + (s.ongoing ? ' ongoing' : '') + '" data-tip="' + escapeHtml(tip) + '" style="width:' + w.toFixed(3) + '%; background-color:' + GANTT_PHASE[s.phase].color + ';"></div>';
+    }).join('');
+    const last = g.segs[g.segs.length - 1];
+    const bar = '<div class="gantt-bar" style="left:' + pct(g.start) + '; width:calc(' + pct(g.end) + ' - ' + pct(g.start) + '); background-color:' + GANTT_PHASE[last.phase].color + ';">' + segHtml + '</div>' +
+      (g.endMark ? '<div class="gantt-end" data-tip="' + escapeHtml((r.status || '') + ' on ' + fmtDateTime(new Date(g.end).toISOString())) + '" style="left:' + pct(g.end) + '; background:' + g.endMark + ';"></div>' : '');
+    const meta = (r.status || '') + ' · ' + fmtSpan(total) + (g.ongoing ? ' so far' : ' total');
+    return '<div class="gantt-row" tabindex="0" role="button" onclick="openDetail(\'' + r.id + '\',\'mine\')" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();openDetail(\'' + r.id + '\',\'mine\');}">' +
+      '<div class="gantt-label" title="' + escapeHtml((r.invoiceNumber || '—') + ' — ' + (r.vendorName || '') + ' (' + (r.department || '') + ')') + '">' +
+        '<div class="inv">' + escapeHtml(r.invoiceNumber || '—') + urgentTag(r) + '</div>' +
+        '<div class="ven">' + escapeHtml(r.vendorName || '') + '</div>' +
+        '<div class="meta">' + escapeHtml(meta) + '</div>' +
+      '</div>' +
+      '<div class="gantt-track">' + gridHtml + bar + '</div>' +
+    '</div>';
+  }).join('');
+
+  return legendHtml +
+    '<div class="gantt-scroll" onmouseover="ganttTipOver(event)" onmousemove="ganttTipMove(event)" onmouseout="ganttTipOut(event)">' +
+      '<div class="gantt">' +
+        '<div class="gantt-head"><div class="gantt-label-col"></div><div class="gantt-axis">' + axisHtml + '</div></div>' +
+        rowsHtml +
+      '</div>' +
+    '</div>';
+}
+function ganttTipOver(evt){
+  const el = evt.target.closest && evt.target.closest('[data-tip]');
+  if (el) showChartTooltip(evt, el.dataset.tip); else hideChartTooltip();
+}
+function ganttTipMove(evt){ moveChartTooltip(evt); }
+function ganttTipOut(evt){
+  const to = evt.relatedTarget;
+  if (!to || !to.closest || !to.closest('[data-tip]')) hideChartTooltip();
 }
 function switchAnalyticsSubtab(name){
   document.querySelectorAll('#view-analytics .subtab-btn').forEach(b => {
