@@ -334,6 +334,26 @@
   .step .step-label { font-size: 11.5px; font-weight: 600; color: var(--ink); }
   .step .step-date { font-size: 10.5px; color: var(--sub); margin-top: 2px; }
 
+  /* ---- Request Timeline: filters ---- */
+  .tl-counts { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+  .tl-count {
+    display: inline-flex; align-items: center; gap: 7px; font: inherit; font-size: 12.5px; color: var(--sub);
+    background: var(--paper); border: 1px solid var(--line); border-radius: 16px; padding: 5px 12px; cursor: pointer;
+  }
+  .tl-count:hover { color: var(--ink); }
+  .tl-count.active { border-color: var(--ink); color: var(--ink); }
+  .tl-count i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  .tl-count b { color: var(--ink); }
+  .tl-filters {
+    display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) repeat(2, minmax(0, 150px)) auto;
+    gap: 12px; align-items: end; margin-bottom: 12px;
+  }
+  .tl-filters .text-field { font-size: 13.5px; padding: 8px 10px; }
+  .tl-filter-actions .btn { padding: 8px 14px; white-space: nowrap; }
+  @media (max-width: 980px) { .tl-filters { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+  @media (max-width: 560px) { .tl-filters { grid-template-columns: 1fr 1fr; } }
+  .gantt-track { overflow: hidden; }
+
   /* ---- Request Timeline: Gantt / List toggle ---- */
   .view-toggle {
     display: inline-flex; gap: 2px; padding: 3px; background: var(--paper);
@@ -645,11 +665,43 @@
             <button type="button" data-mode="gantt" aria-pressed="false" onclick="setAnalyticsTimelineMode('gantt')">Gantt</button>
             <button type="button" data-mode="list" aria-pressed="false" onclick="setAnalyticsTimelineMode('list')">List</button>
           </div>
-          <select class="filter-select" id="analytics-timeline-filter" onchange="renderAnalyticsTimeline()">
-            <option value="">All statuses</option>
-          </select>
         </div>
       </div>
+      <div class="tl-counts" id="analytics-timeline-counts"></div>
+      <div class="tl-filters">
+        <div>
+          <label class="field-label" for="analytics-timeline-filter">Status</label>
+          <select class="text-field" id="analytics-timeline-filter" onchange="renderAnalyticsTimeline()">
+            <option value="">All</option>
+          </select>
+        </div>
+        <div>
+          <label class="field-label" for="analytics-timeline-requester">Requested by</label>
+          <select class="text-field" id="analytics-timeline-requester" onchange="renderAnalyticsTimeline()">
+            <option value="">All</option>
+          </select>
+        </div>
+        <div>
+          <label class="field-label" for="analytics-timeline-urgent">Urgent</label>
+          <select class="text-field" id="analytics-timeline-urgent" onchange="renderAnalyticsTimeline()">
+            <option value="">All</option>
+            <option value="yes">Urgent only</option>
+            <option value="no">Not urgent</option>
+          </select>
+        </div>
+        <div>
+          <label class="field-label" for="analytics-timeline-from">From date</label>
+          <input type="date" class="text-field" id="analytics-timeline-from" onchange="renderAnalyticsTimeline()">
+        </div>
+        <div>
+          <label class="field-label" for="analytics-timeline-to">To date</label>
+          <input type="date" class="text-field" id="analytics-timeline-to" onchange="renderAnalyticsTimeline()">
+        </div>
+        <div class="tl-filter-actions">
+          <button type="button" class="btn btn-ghost" onclick="clearAnalyticsTimelineFilters()">Clear filters</button>
+        </div>
+      </div>
+      <div class="muted small" id="analytics-timeline-summary" style="margin-bottom:12px;"></div>
       <div id="analytics-timeline-list"></div>
     </div>
     </div>
@@ -1977,20 +2029,101 @@ function renderTimelineRow(record){
     '<div class="stepper">' + stepsHtml + '</div>' +
   '</div>';
 }
+/* Request Timeline filters. Status, requester and urgency match on the request itself.
+   The date range keeps any request that was active at some point inside it
+   (submitted on or before "To", and still open or finished on or after "From"),
+   so the Gantt shows everything that was moving during that window. */
+function analyticsTimelineDateRange(){
+  const fromV = document.getElementById('analytics-timeline-from').value;
+  const toV = document.getElementById('analytics-timeline-to').value;
+  const from = fromV ? new Date(fromV + 'T00:00:00').getTime() : null;
+  const to = toV ? new Date(toV + 'T23:59:59.999').getTime() : null;
+  return { from, to };
+}
+function requestActiveSpan(r){
+  const t0 = Date.parse(r.submittedDate);
+  if (isNaN(t0)) return null;
+  let end = Date.now();
+  if (r.status === STATUS.PROCESSED) { const f = Date.parse(r.financeDecisionDate); if (!isNaN(f)) end = f; }
+  else if (r.status === STATUS.REJECTED_APPROVER) { const a = Date.parse(r.approvalDate); if (!isNaN(a)) end = a; }
+  return { start: t0, end: Math.max(t0, end) };
+}
+function fillSelect(sel, values){
+  const keep = sel.value;
+  sel.length = 1; // keep the "All" option
+  values.forEach(v => { const o = document.createElement('option'); o.value = v; o.textContent = v; sel.appendChild(o); });
+  sel.value = values.includes(keep) ? keep : '';
+}
+function setAnalyticsTimelineStatus(status){
+  const sel = document.getElementById('analytics-timeline-filter');
+  sel.value = sel.value === status ? '' : status;
+  renderAnalyticsTimeline();
+}
+function clearAnalyticsTimelineFilters(){
+  ['analytics-timeline-filter', 'analytics-timeline-requester', 'analytics-timeline-urgent',
+   'analytics-timeline-from', 'analytics-timeline-to'].forEach(id => { document.getElementById(id).value = ''; });
+  renderAnalyticsTimeline();
+}
 function renderAnalyticsTimeline(){
-  const filterSel = document.getElementById('analytics-timeline-filter');
-  if (filterSel.options.length <= 1) {
-    Object.values(STATUS).forEach(s => { const opt = document.createElement('option'); opt.value = s; opt.textContent = s; filterSel.appendChild(opt); });
+  const statusSel = document.getElementById('analytics-timeline-filter');
+  const reqSel = document.getElementById('analytics-timeline-requester');
+  const urgSel = document.getElementById('analytics-timeline-urgent');
+  const fromEl = document.getElementById('analytics-timeline-from');
+  const toEl = document.getElementById('analytics-timeline-to');
+
+  const statuses = Object.values(STATUS).filter(st => st !== STATUS.DRAFT);
+  if (statusSel.options.length <= 1) fillSelect(statusSel, statuses);
+
+  const base = analyticsScope().filter(r => r.status !== STATUS.DRAFT);
+  const requesters = [...new Set(base.map(r => r.requestorName).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  fillSelect(reqSel, requesters);
+
+  // Keep the two date pickers from crossing each other.
+  toEl.min = fromEl.value || '';
+  fromEl.max = toEl.value || '';
+  let range = analyticsTimelineDateRange();
+  if (range.from != null && range.to != null && range.from > range.to) { toEl.value = ''; range = analyticsTimelineDateRange(); }
+
+  // Everything except status — used for the status counts, so each count says
+  // how many you'd get by picking that status with the other filters as they are.
+  let scope = base;
+  if (reqSel.value) scope = scope.filter(r => r.requestorName === reqSel.value);
+  if (urgSel.value === 'yes') scope = scope.filter(r => !!r.isUrgent);
+  if (urgSel.value === 'no') scope = scope.filter(r => !r.isUrgent);
+  if (range.from != null || range.to != null) {
+    scope = scope.filter(r => {
+      const sp = requestActiveSpan(r);
+      if (!sp) return false;
+      return (range.to == null || sp.start <= range.to) && (range.from == null || sp.end >= range.from);
+    });
   }
-  const filterVal = filterSel.value;
-  let scope = analyticsScope().filter(r => r.status !== STATUS.DRAFT);
-  if (filterVal) scope = scope.filter(r => r.status === filterVal);
+
+  document.getElementById('analytics-timeline-counts').innerHTML = statuses.map(st => {
+    const n = scope.filter(r => r.status === st).length;
+    const on = statusSel.value === st;
+    return '<button type="button" class="tl-count' + (on ? ' active' : '') + '" aria-pressed="' + on + '" onclick="setAnalyticsTimelineStatus(\'' + escapeHtml(st).replace(/'/g, '\\\'') + '\')">' +
+      '<i style="background:' + (STATUS_COLOR_VAR[st] || 'var(--sub)') + '"></i>' + escapeHtml(st) + ': <b>' + n + '</b></button>';
+  }).join('');
+
+  if (statusSel.value) scope = scope.filter(r => r.status === statusSel.value);
   scope.sort((a, b) => (b.submittedDate || '').localeCompare(a.submittedDate || ''));
+  const totalMatches = scope.length;
   scope = scope.slice(0, 50);
+  analyticsTimelineRange = range;
+
+  const anyFilter = statusSel.value || reqSel.value || urgSel.value || fromEl.value || toEl.value;
+  document.getElementById('analytics-timeline-summary').textContent =
+    (totalMatches === 0 ? '' :
+      'Showing ' + (totalMatches > 50 ? 'the 50 most recent of ' + totalMatches : totalMatches) + ' request' + (totalMatches === 1 ? '' : 's') +
+      (anyFilter ? ' matching your filters.' : '.'));
   syncAnalyticsTimelineToggle();
   const host = document.getElementById('analytics-timeline-list');
   if (!scope.length) {
-    host.innerHTML = '<div class="muted small" style="padding:20px 0;">No submitted requests yet.</div>';
+    const anyFilter = ['analytics-timeline-filter', 'analytics-timeline-requester', 'analytics-timeline-urgent', 'analytics-timeline-from', 'analytics-timeline-to']
+      .some(id => document.getElementById(id).value);
+    host.innerHTML = anyFilter
+      ? '<div class="muted small" style="padding:20px 0;">No requests match these filters. Change a filter or select Clear filters to see everything.</div>'
+      : '<div class="muted small" style="padding:20px 0;">No submitted requests yet.</div>';
     return;
   }
   host.innerHTML = analyticsTimelineMode === 'gantt'
@@ -2002,6 +2135,7 @@ function renderAnalyticsTimeline(){
    Each request is one row. Its bar runs from submission to its final decision
    (or to now, if it's still open), split into the stages it has been through.
    Stage colours match STATUS_COLOR_VAR so the chart reads like the status pills. */
+var analyticsTimelineRange = { from: null, to: null };
 var analyticsTimelineMode = (function(){
   try { return localStorage.getItem('apTimelineMode') === 'list' ? 'list' : 'gantt'; } catch (e) { return 'gantt'; }
 })();
@@ -2079,18 +2213,23 @@ function renderGanttChart(scope){
   let maxMs = Math.max(nowMs, ...rows.map(x => x.g.end));
   const pad = Math.max((maxMs - minMs) * 0.03, DAY_MS / 2);
   minMs -= pad; maxMs += pad;
+  // A chosen date range sets the visible window; bars outside it are clipped at the edges.
+  const rng = analyticsTimelineRange || {};
+  if (rng.from != null) minMs = rng.from;
+  if (rng.to != null) maxMs = rng.to;
+  if (maxMs - minMs < DAY_MS) maxMs = minMs + DAY_MS;
   const pct = t => ((t - minMs) / (maxMs - minMs) * 100).toFixed(3) + '%';
   const ticks = ganttTicks(minMs, maxMs);
   const showYear = new Date(minMs).getFullYear() !== new Date(maxMs).getFullYear();
   const tickFmt = t => new Date(t).toLocaleDateString('en-SG', showYear ? { day: 'numeric', month: 'short', year: '2-digit' } : { day: 'numeric', month: 'short' });
   const gridHtml = ticks.map(t => '<div class="gantt-grid" style="left:' + pct(t) + '"></div>').join('') +
-    '<div class="gantt-now" style="left:' + pct(nowMs) + '"></div>';
+    (nowMs >= minMs && nowMs <= maxMs ? '<div class="gantt-now" style="left:' + pct(nowMs) + '"></div>' : '');
 
   // Hide a date tick that would collide with the "Today" label.
   const nowFrac = (nowMs - minMs) / (maxMs - minMs);
   const axisHtml = ticks.filter(t => { const f = (t - minMs) / (maxMs - minMs); return f > 0.04 && Math.abs(f - nowFrac) > 0.06; })
     .map(t => '<div class="gantt-tick" style="left:' + pct(t) + '">' + escapeHtml(tickFmt(t)) + '</div>').join('') +
-    '<div class="gantt-tick today" style="left:' + pct(nowMs) + '">Today</div>';
+    (nowMs >= minMs && nowMs <= maxMs ? '<div class="gantt-tick today" style="left:' + pct(nowMs) + '">Today</div>' : '');
 
   const used = new Set();
   rows.forEach(x => x.g.segs.forEach(s => used.add(s.phase)));
