@@ -875,7 +875,8 @@ const PAYMENT_TERM_GROUPS = [
     { code: 'DP25BL75', desc: '25% DOWN PAYMENT, 75% 7 DAYS AFTER INVOICE DATE' },
     { code: 'DP30BC', desc: '30% DOWN PAYMENT, 70% BEFORE COLLECTION' },
     { code: 'DP30DO30', desc: '30% DOWN PAYMENT, 70% 30 DAYS UPON DO DATE' },
-    { code: 'DP50BD', desc: '50% DOWN PAYMENT, 50% BEFORE DELIVERY' } ] }
+    { code: 'DP50BD', desc: '50% DOWN PAYMENT, 50% BEFORE DELIVERY' },
+    { code: 'DP50INV3', desc: '50% DOWN PAYMENT, 50% 3 DAYS AFTER INVOICE DATE' } ] }
 ];
 function paymentTermLabel(t){ return t.code + ' \u2013 ' + t.desc; }
 function paymentTermOptionsHtml(selected){
