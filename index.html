@@ -2508,7 +2508,7 @@ function closeModal(){ document.getElementById('modal-overlay').style.display = 
 function docLinksHtml(record){
   const docs = parseDocLinks(record.documentLinks);
   if (!docs.length) return '<span class="muted">No documents attached.</span>';
-  return '<div class="doc-link-list">' + docs.map(d => docAnchorHtml(d)).join('') + '</div>';
+  return '<div class="doc-link-list">' + docs.map(d => docAnchorHtml(d, record.id)).join('') + '</div>';
 }
 /* Document links must always open the Finance copy ("Process Improvement / Finance Documents/..."),
    never the department's extra copy (e.g. Operations' "z Direct From AP HTML" folder). Links saved
@@ -2518,19 +2518,46 @@ function isFinanceDocUrl(url){
   try { return decodeURIComponent(String(url || '')).indexOf('/' + DOC_LIBRARY_ROOT + '/') !== -1; }
   catch (e) { return false; }
 }
-function docAnchorHtml(d){
-  const fin = isFinanceDocUrl(d.url);
-  return '<a href="' + escapeHtml(d.url) + '" target="_blank" rel="noopener"' +
-    (fin ? '' : ' data-resolve-finance="1" data-doc-name="' + escapeHtml(d.name) + '"') + '>' + escapeHtml(d.name) + '</a>';
+/* Every document link is resolved by file name when clicked, because SharePoint links are
+   path-based and break (404) as soon as the file or one of its folders is moved or renamed. */
+function docAnchorHtml(d, recordId){
+  return '<a href="' + escapeHtml(d.url) + '" target="_blank" rel="noopener" data-resolve-finance="1" data-doc-name="' + escapeHtml(d.name) + '"' +
+    (recordId ? ' data-record-id="' + escapeHtml(recordId) + '"' : '') + '>' + escapeHtml(d.name) + '</a>';
+}
+/* When a link had gone stale (file moved/renamed), save the corrected URL back onto the request so
+   the stored link is fixed for good. Best-effort: silently skipped if the person can't edit the item. */
+async function saveCorrectedDocUrl(recordId, name, oldUrl, newUrl){
+  if (!recordId || !newUrl || newUrl === oldUrl) return false;
+  try {
+    const live = await fetchCurrentRecord(recordId);
+    const docs = parseDocLinks(live.documentLinks);
+    let changed = false;
+    docs.forEach(d => { if (d.name === name && d.url !== newUrl) { d.url = newUrl; changed = true; } });
+    if (!changed) return false;
+    const json = JSON.stringify(docs);
+    await updateRequestItem(recordId, { documentLinks: json });
+    const cached = findRecord(recordId);
+    if (cached) cached.documentLinks = json;
+    if (modalContext && modalContext.record && modalContext.record.id === recordId) modalContext.record.documentLinks = json;
+    if (modalContext && modalContext.editDocs) modalContext.editDocs.forEach(d => { if (d.name === name) d.url = newUrl; });
+    return true;
+  } catch (e) { return false; }
 }
 async function findFinanceDocUrl(name){
   if (!docLibraryDriveId) { try { await resolveDocLibraryDrive(); } catch (e) {} }
   if (!docLibraryDriveId) return null;
-  const q = String(name).replace(/'/g, "''");
-  const res = await graphFetch("/drives/" + docLibraryDriveId + "/root:/" + encodeURIComponent(DOC_LIBRARY_ROOT) +
-    ":/search(q='" + encodeURIComponent(q) + "')?$select=name,webUrl,parentReference&$top=50");
-  const hit = (res.value || []).find(it => it.name === name && it.webUrl && isFinanceDocUrl(it.webUrl));
-  return hit ? hit.webUrl : null;
+  // Characters that break a Graph search() call are turned into spaces; the exact name is matched afterwards.
+  const queries = [String(name), String(name).replace(/[()&'#%,+]/g, ' ').replace(/\s+/g, ' ').trim()];
+  const hits = [];
+  for (const q of [...new Set(queries)]) {
+    try {
+      const res = await graphFetch("/drives/" + docLibraryDriveId + "/root/search(q='" + encodeURIComponent(q) + "')?$select=name,webUrl&$top=100");
+      (res.value || []).forEach(it => { if (it.name === name && it.webUrl) hits.push(it.webUrl); });
+    } catch (e) { /* try the next query */ }
+    if (hits.length) break;
+  }
+  // Prefer a copy inside Finance Documents; otherwise any exact-name match in this library.
+  return hits.find(isFinanceDocUrl) || hits[0] || null;
 }
 document.addEventListener('click', async function(ev){
   const a = ev.target.closest && ev.target.closest('a[data-resolve-finance]');
@@ -2539,8 +2566,13 @@ document.addEventListener('click', async function(ev){
   const w = window.open('', '_blank'); // open now so the popup blocker allows it
   let url = null;
   try { url = await findFinanceDocUrl(a.getAttribute('data-doc-name')); } catch (e) { url = null; }
-  const target = url || a.getAttribute('href');
+  const oldUrl = a.getAttribute('href');
+  const target = url || oldUrl;
   if (w) { w.opener = null; w.location.href = target; } else { window.location.href = target; }
+  if (url && url !== oldUrl) {
+    const saved = await saveCorrectedDocUrl(a.getAttribute('data-record-id'), a.getAttribute('data-doc-name'), oldUrl, url);
+    if (saved) a.setAttribute('href', url);
+  }
 });
 function baseDetailGrid(record){
   let urgentRow;
@@ -2733,7 +2765,7 @@ function renderEditDocListInner(){
   const docs = modalContext.editDocs || [];
   if (!docs.length) return '<span class="muted small">No documents attached.</span>';
   return docs.map((d, i) =>
-    '<div class="file-chip">' + docAnchorHtml(d) +
+    '<div class="file-chip">' + docAnchorHtml(d, modalContext.record && modalContext.record.id) +
     '<span class="rm" onclick="removeEditDoc(' + i + ')">Remove</span></div>'
   ).join('');
 }
