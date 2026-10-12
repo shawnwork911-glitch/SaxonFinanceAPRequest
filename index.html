@@ -2508,8 +2508,40 @@ function closeModal(){ document.getElementById('modal-overlay').style.display = 
 function docLinksHtml(record){
   const docs = parseDocLinks(record.documentLinks);
   if (!docs.length) return '<span class="muted">No documents attached.</span>';
-  return '<div class="doc-link-list">' + docs.map(d => '<a href="' + d.url + '" target="_blank" rel="noopener">' + escapeHtml(d.name) + '</a>').join('') + '</div>';
+  return '<div class="doc-link-list">' + docs.map(d => docAnchorHtml(d)).join('') + '</div>';
 }
+/* Document links must always open the Finance copy ("Process Improvement / Finance Documents/..."),
+   never the department's extra copy (e.g. Operations' "z Direct From AP HTML" folder). Links saved
+   with the Finance URL open directly; any other link (older records) is looked up in the Finance
+   folder by file name when clicked — see openDocLink(). */
+function isFinanceDocUrl(url){
+  try { return decodeURIComponent(String(url || '')).indexOf('/' + DOC_LIBRARY_ROOT + '/') !== -1; }
+  catch (e) { return false; }
+}
+function docAnchorHtml(d){
+  const fin = isFinanceDocUrl(d.url);
+  return '<a href="' + escapeHtml(d.url) + '" target="_blank" rel="noopener"' +
+    (fin ? '' : ' data-resolve-finance="1" data-doc-name="' + escapeHtml(d.name) + '"') + '>' + escapeHtml(d.name) + '</a>';
+}
+async function findFinanceDocUrl(name){
+  if (!docLibraryDriveId) { try { await resolveDocLibraryDrive(); } catch (e) {} }
+  if (!docLibraryDriveId) return null;
+  const q = String(name).replace(/'/g, "''");
+  const res = await graphFetch("/drives/" + docLibraryDriveId + "/root:/" + encodeURIComponent(DOC_LIBRARY_ROOT) +
+    ":/search(q='" + encodeURIComponent(q) + "')?$select=name,webUrl,parentReference&$top=50");
+  const hit = (res.value || []).find(it => it.name === name && it.webUrl && isFinanceDocUrl(it.webUrl));
+  return hit ? hit.webUrl : null;
+}
+document.addEventListener('click', async function(ev){
+  const a = ev.target.closest && ev.target.closest('a[data-resolve-finance]');
+  if (!a) return;
+  ev.preventDefault();
+  const w = window.open('', '_blank'); // open now so the popup blocker allows it
+  let url = null;
+  try { url = await findFinanceDocUrl(a.getAttribute('data-doc-name')); } catch (e) { url = null; }
+  const target = url || a.getAttribute('href');
+  if (w) { w.opener = null; w.location.href = target; } else { window.location.href = target; }
+});
 function baseDetailGrid(record){
   let urgentRow;
   if (record.isUrgent) {
@@ -2701,7 +2733,7 @@ function renderEditDocListInner(){
   const docs = modalContext.editDocs || [];
   if (!docs.length) return '<span class="muted small">No documents attached.</span>';
   return docs.map((d, i) =>
-    '<div class="file-chip"><a href="' + d.url + '" target="_blank" rel="noopener">' + escapeHtml(d.name) + '</a>' +
+    '<div class="file-chip">' + docAnchorHtml(d) +
     '<span class="rm" onclick="removeEditDoc(' + i + ')">Remove</span></div>'
   ).join('');
 }
