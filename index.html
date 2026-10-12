@@ -2543,17 +2543,58 @@ async function saveCorrectedDocUrl(recordId, name, oldUrl, newUrl){
     return true;
   } catch (e) { return false; }
 }
-async function findFinanceDocUrl(name){
+/* Finance folders come in two layouts: .../Period/Department/<Request ID>/file (older uploads) and
+   .../Period/Department/<Vendor name>/file (newer uploads). From a saved link, check the saved path and
+   both layouts directly (exact path lookup — no search needed); the first one that exists wins. */
+async function findDocByKnownPaths(savedUrl, name, record){
+  if (!docLibraryDriveId) return null;
+  let rel = '';
+  try { rel = decodeURIComponent(new URL(savedUrl, location.href).pathname); } catch (e) { return null; }
+  const key = '/' + DOC_LIBRARY_ROOT + '/';
+  const at = rel.indexOf(key);
+  if (at === -1) return null;
+  const parts = rel.slice(at + key.length).split('/').filter(Boolean);   // [period, department, subfolder, file]
+  if (parts.length < 4) return null;
+  const period = parts[0], dept = parts[1], savedSub = parts[2];
+  const subs = [savedSub];
+  if (record && record.requestId) subs.push(record.requestId);
+  if (record && record.vendorName) subs.push(vendorFolderName(record.vendorName));
+  const tried = [];
+  for (const sub of subs) {
+    if (!sub || tried.indexOf(sub) !== -1) continue;
+    tried.push(sub);
+    const path = [DOC_LIBRARY_ROOT, period, dept, sub, name].join('/');
+    try {
+      const it = await graphFetch("/drives/" + docLibraryDriveId + "/root:/" + encodeURIComponent(path).replace(/%2F/g, '/') + "?$select=name,webUrl");
+      if (it && it.webUrl) return it.webUrl;
+    } catch (e) { /* not at this path — try the next layout */ }
+  }
+  return null;
+}
+async function findFinanceDocUrl(name, savedUrl, record){
   if (!docLibraryDriveId) { try { await resolveDocLibraryDrive(); } catch (e) {} }
   if (!docLibraryDriveId) return null;
-  // Characters that break a Graph search() call are turned into spaces; the exact name is matched afterwards.
-  const queries = [String(name), String(name).replace(/[()&'#%,+]/g, ' ').replace(/\s+/g, ' ').trim()];
+  name = String(name);
+  const direct = await findDocByKnownPaths(savedUrl, name, record);
+  if (direct) return direct;
+  const norm = x => String(x || '').trim().toLowerCase();
+  // File names with & ( ) # etc. confuse SharePoint search, so try the full name first and then
+  // progressively plainer queries; every result is still matched against the exact file name.
+  const tokens = name.replace(/\.[^.]+$/, '').split(/[^A-Za-z0-9]+/).filter(t => t.length >= 4);
+  const longest = tokens.slice().sort((x, y) => y.length - x.length)[0];
+  const queries = [
+    name,
+    name.replace(/[()&'#%,+]/g, ' ').replace(/\s+/g, ' ').trim(),
+    tokens.slice(0, 4).join(' '),
+    longest || ''
+  ].filter((q, i, arr) => q && arr.indexOf(q) === i);
   const hits = [];
-  for (const q of [...new Set(queries)]) {
+  for (const q of queries) {
     try {
-      const res = await graphFetch("/drives/" + docLibraryDriveId + "/root/search(q='" + encodeURIComponent(q) + "')?$select=name,webUrl&$top=100");
-      (res.value || []).forEach(it => { if (it.name === name && it.webUrl) hits.push(it.webUrl); });
-    } catch (e) { /* try the next query */ }
+      const res = await graphFetch("/drives/" + docLibraryDriveId + "/root/search(q='" + encodeURIComponent(q) + "')?$select=name,webUrl&$top=200");
+      (res.value || []).forEach(it => { if (it.webUrl && norm(it.name) === norm(name)) hits.push(it.webUrl); });
+      if (!hits.length) console.warn('[doc link] no exact match for query:', q, '(' + (res.value || []).length + ' results)');
+    } catch (e) { console.warn('[doc link] search failed for query:', q, e && e.message); }
     if (hits.length) break;
   }
   // Prefer a copy inside Finance Documents; otherwise any exact-name match in this library.
@@ -2565,7 +2606,7 @@ document.addEventListener('click', async function(ev){
   ev.preventDefault();
   const w = window.open('', '_blank'); // open now so the popup blocker allows it
   let url = null;
-  try { url = await findFinanceDocUrl(a.getAttribute('data-doc-name')); } catch (e) { url = null; }
+  try { url = await findFinanceDocUrl(a.getAttribute('data-doc-name'), a.getAttribute('href'), findRecord(a.getAttribute('data-record-id'))); } catch (e) { url = null; }
   const oldUrl = a.getAttribute('href');
   const target = url || oldUrl;
   if (w) { w.opener = null; w.location.href = target; } else { window.location.href = target; }
