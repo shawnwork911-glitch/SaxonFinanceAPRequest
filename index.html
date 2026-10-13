@@ -166,6 +166,17 @@
   .view { display: none; }
   .view.active { display: block; }
 
+  /* Currency totals strip shown above the approval / finance queues */
+  .currency-totals { display: flex; flex-wrap: wrap; gap: 10px; margin: 0 0 14px; }
+  .currency-total {
+    flex: 1 1 170px; background: var(--accent-light); border: 1px solid var(--line);
+    border-radius: 8px; padding: 10px 14px;
+  }
+  .currency-total .ct-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--sub); }
+  .currency-total .ct-amount { font-size: 18px; font-weight: 700; color: var(--accent); margin-top: 2px; }
+  .currency-total .ct-count { font-size: 12px; color: var(--sub); }
+  .currency-total.ct-empty { background: var(--panel); }
+  .currency-total.ct-empty .ct-amount { color: var(--sub); }
   .card {
     background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
     padding: 20px 22px; margin-bottom: 18px;
@@ -579,6 +590,7 @@
           <button type="button" class="btn btn-ghost" onclick="refreshAll()">Refresh</button>
         </div>
       </div>
+      <div class="currency-totals" id="approvals-totals"></div>
       <table class="data-table">
         <thead><tr><th>Document Number</th><th>Department</th><th>Requestor</th><th>Vendor</th><th>Amount</th><th>Due Date</th></tr></thead>
         <tbody id="approvals-table-body"></tbody>
@@ -609,6 +621,7 @@
           <button type="button" class="btn btn-ghost" onclick="refreshAll()">Refresh</button>
         </div>
       </div>
+      <div class="currency-totals" id="finance-totals"></div>
       <table class="data-table">
         <thead><tr><th>Document Number</th><th>Department</th><th>Requestor</th><th>Vendor</th><th>Amount</th><th>Approved by</th></tr></thead>
         <tbody id="finance-table-body"></tbody>
@@ -723,6 +736,19 @@
         <button type="button" class="btn btn-ghost" onclick="recheckRolesList()">Recheck</button>
       </div>
     </div>
+    <div class="card" id="admin-migrate-card">
+      <div class="card-head">
+        <div>
+          <h2>Move Old Files to Entity Folders</h2>
+          <div class="muted small">One-off tool. Finds files saved in the old layout (<code>Period/Department/Company</code>) and moves each one into <code>MY</code> or <code>SG</code> based on its request's currency, then updates the saved links. Run <strong>Scan</strong> first &mdash; nothing moves until you click Move. Old empty folders are left in place.</div>
+        </div>
+      </div>
+      <div class="btn-row" style="justify-content:flex-start;">
+        <button type="button" class="btn btn-ghost" id="migrate-scan-btn" onclick="scanOldFiles()">Scan</button>
+        <button type="button" class="btn btn-primary" id="migrate-run-btn" onclick="moveOldFiles()" disabled>Move files</button>
+      </div>
+      <pre id="migrate-log" class="small" style="white-space:pre-wrap; margin:12px 0 0; color:var(--sub);"></pre>
+    </div>
     <div class="card">
       <div class="card-head">
         <div>
@@ -828,7 +854,7 @@ const SP_HOSTNAME = "saxonrenewables.sharepoint.com";    // your SharePoint tena
 const SP_SITE_PATH = "/sites/Operations";                // the site the list & document library live on
 const SP_LIST_NAME = "Finance AP Record";                // must match the SharePoint list's display name exactly
 const SP_DOC_LIBRARY_NAME = "Process Improvement";       // the document library (not the site's default "Documents") that holds the upload folder
-const DOC_LIBRARY_ROOT = "Finance Documents";            // folder inside that library — uploads land in DOC_LIBRARY_ROOT/PeriodFolder/Department/VendorName
+const DOC_LIBRARY_ROOT = "Finance Documents";            // folder inside that library — uploads land in DOC_LIBRARY_ROOT/Entity/PeriodFolder/Department/VendorName
 /* Extra copy destinations per department. Every department's attachments always upload to
    SP_DOC_LIBRARY_NAME / DOC_LIBRARY_ROOT above (the main copy, whose links are saved on the
    request). A department listed here ALSO gets a second copy in its own library + root folder,
@@ -1597,6 +1623,12 @@ async function uploadOneFile(driveId, folderPath, file, dupIndex){
   );
   return { name: item.name || stampedName, url: item.webUrl };
 }
+/* Entity = which company the request belongs to, worked out from the currency (same rule as the
+   holiday calendar): MYR -> Malaysia entity, every other currency -> Singapore entity.
+   The entity name becomes the first folder under DOC_LIBRARY_ROOT. */
+const ENTITY_FOLDERS = { MY: 'MY', SG: 'SG' };   // rename here if you want e.g. "MY Entity" / "SG Entity"
+function entityForCurrency(currency){ return currency === 'MYR' ? 'MY' : 'SG'; }
+function entityFolderFor(currency){ return ENTITY_FOLDERS[entityForCurrency(currency)]; }
 /* Two folders per month, named after the semi-monthly cutoff they lead up to:
    - days 12–22   -> "22th <Mon> <Year>" (current month)
    - days 23–end  -> "12th <Mon> <Year>" (NEXT month's cutoff)
@@ -1630,9 +1662,10 @@ function vendorFolderName(vendorName){
     .replace(/[.\s]+$/, '')
     .slice(0, 200);
 }
-async function uploadFilesForRequest(department, vendorName, requestId, files, onProgress){
+async function uploadFilesForRequest(department, vendorName, currency, requestId, files, onProgress){
   if (!files.length) return [];
   const periodFolder = getPeriodFolderName();
+  const entityFolder = entityFolderFor(currency);
   // Files are grouped by vendor; fall back to the request ID if no vendor name was entered yet (e.g. an early draft).
   const subFolder = vendorFolderName(vendorName) || requestId;
   // dests[0] is the main Finance Documents copy (its links are what the request stores);
@@ -1640,7 +1673,7 @@ async function uploadFilesForRequest(department, vendorName, requestId, files, o
   const dests = uploadDestinationsFor(department).map(d => {
     const folderPath = d.vendorOnly
       ? d.root + '/' + subFolder                                        // extra copy: <root>/VendorName
-      : d.root + '/' + periodFolder + '/' + department + '/' + subFolder; // main copy: <root>/Period/Department/VendorName
+      : d.root + '/' + entityFolder + '/' + periodFolder + '/' + department + '/' + subFolder; // main copy: <root>/Entity/Period/Department/VendorName
     return Object.assign({}, d, { folderPath, cacheKey: d.driveId + '|' + folderPath });
   });
   const results = new Array(files.length);
@@ -1913,7 +1946,7 @@ async function handleSaveDraft(){
   setBusy(btn, true, 'Saving…');
   try {
     const requestId = pendingNewRequestId || (pendingNewRequestId = genRequestId());
-    const docs = await uploadFilesForRequest(form.department, form.vendorName, requestId, newRequestFiles, uploadProgressLabel(btn, 'Uploading'));
+    const docs = await uploadFilesForRequest(form.department, form.vendorName, form.currency, requestId, newRequestFiles, uploadProgressLabel(btn, 'Uploading'));
     btn.textContent = 'Saving…';
     const approverEmail = form.isUrgent ? (urgentApproverEmail || '') : ((deptApproverMap[form.department] || {}).email || '');
     const record = Object.assign({}, form, {
@@ -1942,7 +1975,7 @@ async function handleSubmitRequest(){
   setBusy(btn, true, 'Submitting…');
   try {
     const requestId = pendingNewRequestId || (pendingNewRequestId = genRequestId());
-    const docs = await uploadFilesForRequest(form.department, form.vendorName, requestId, newRequestFiles, uploadProgressLabel(btn, 'Uploading'));
+    const docs = await uploadFilesForRequest(form.department, form.vendorName, form.currency, requestId, newRequestFiles, uploadProgressLabel(btn, 'Uploading'));
     btn.textContent = 'Submitting…';
     const approverEmail = form.isUrgent ? urgentApproverEmail : ((deptApproverMap[form.department] || {}).email || '');
     const historyMsg = form.isUrgent
@@ -2021,6 +2054,136 @@ function renderMineTable(){
   ).join('');
 }
 
+/* ---------------------------------------------------------------------
+   One-off migration: move files saved in the old layout (Period/Department/Company/file)
+   into the entity layout (Entity/Period/Department/Company/file), entity chosen from each
+   request's currency. Admin only. Scan = read-only preview; Move = does the work.
+   --------------------------------------------------------------------- */
+let migrationPlan = [];   // [{ record, docs, items:[{ idx, parts }] }]
+function financeRelParts(url){
+  let rel = '';
+  try { rel = decodeURIComponent(new URL(url, location.href).pathname); } catch (e) { return null; }
+  const key = '/' + DOC_LIBRARY_ROOT + '/';
+  const at = rel.indexOf(key);
+  if (at === -1) return null;
+  return rel.slice(at + key.length).split('/').filter(Boolean);   // [period, department, subfolder, file]
+}
+function migLog(text){ document.getElementById('migrate-log').textContent = text; }
+function buildMigrationPlan(){
+  const entityNames = Object.values(ENTITY_FOLDERS);
+  const plan = [];
+  allItemsCache.forEach(r => {
+    const docs = parseDocLinks(r.documentLinks);
+    const items = [];
+    docs.forEach((d, idx) => {
+      if (!d || !d.url || !isFinanceDocUrl(d.url)) return;
+      const parts = financeRelParts(d.url);
+      if (!parts || parts.length < 4 || entityNames.indexOf(parts[0]) !== -1) return;   // unreadable, or already in an entity folder
+      items.push({ idx, parts });
+    });
+    if (items.length) plan.push({ record: r, docs, items });
+  });
+  return plan;
+}
+async function scanOldFiles(){
+  if (!isAdminUser()) return;
+  const btn = document.getElementById('migrate-scan-btn');
+  setBusy(btn, true, 'Scanning…');
+  try {
+    await refreshAll();   // make sure we plan from the latest records
+    migrationPlan = buildMigrationPlan();
+    const counts = { MY: 0, SG: 0 }, reqs = { MY: 0, SG: 0 };
+    migrationPlan.forEach(p => { const e = entityForCurrency(p.record.currency); counts[e] += p.items.length; reqs[e]++; });
+    const total = counts.MY + counts.SG;
+    migLog(total
+      ? 'Found ' + total + ' file(s) in the old layout:\n' +
+        '  \u2192 MY: ' + counts.MY + ' file(s) from ' + reqs.MY + ' request(s)\n' +
+        '  \u2192 SG: ' + counts.SG + ' file(s) from ' + reqs.SG + ' request(s)\n\nClick "Move files" to start.'
+      : 'Nothing to move \u2014 every saved file is already in an entity folder.');
+    document.getElementById('migrate-run-btn').disabled = !total;
+  } catch (e) { migLog('Scan failed: ' + e.message); }
+  setBusy(btn, false);
+}
+async function getDriveItem(path){
+  return graphFetch("/drives/" + docLibraryDriveId + "/root:/" + encodeURIComponent(path).replace(/%2F/g, '/') + "?$select=id,name,webUrl");
+}
+async function moveOldFiles(){
+  if (!isAdminUser() || !migrationPlan.length) return;
+  if (!confirm('Move the scanned files into their MY / SG folders now? Links on the requests will be updated.')) return;
+  const runBtn = document.getElementById('migrate-run-btn'), scanBtn = document.getElementById('migrate-scan-btn');
+  runBtn.disabled = true; scanBtn.disabled = true;
+  const total = migrationPlan.reduce((n, p) => n + p.items.length, 0);
+  let done = 0, moved = 0, linkNotSaved = 0;
+  const problems = [];
+  try {
+    if (!docLibraryDriveId) await resolveDocLibraryDrive();
+    if (!docLibraryDriveId) throw new Error('Could not find the "' + SP_DOC_LIBRARY_NAME + '" document library.');
+    for (const p of migrationPlan) {
+      const r = p.record, entity = entityFolderFor(r.currency);
+      for (const it of p.items) {
+        const d = p.docs[it.idx];
+        migLog('Moving ' + (done + 1) + ' of ' + total + '\u2026 ' + (moved ? moved + ' moved' : '') + (problems.length ? ', ' + problems.length + ' problem(s)' : '') + '\n' + d.name);
+        try {
+          let parts = it.parts, item = null;
+          try { item = await getDriveItem([DOC_LIBRARY_ROOT].concat(parts).join('/')); }
+          catch (e) {
+            // Saved link is stale (file renamed/moved) \u2014 look the file up by name instead.
+            const found = await findFinanceDocUrl(d.name, d.url, r);
+            const fp = found ? financeRelParts(found) : null;
+            if (fp && fp.length >= 4 && Object.values(ENTITY_FOLDERS).indexOf(fp[0]) === -1) {
+              parts = fp; item = await getDriveItem([DOC_LIBRARY_ROOT].concat(parts).join('/'));
+            } else if (fp && Object.values(ENTITY_FOLDERS).indexOf(fp[0]) !== -1) {
+              throw new Error('already in an entity folder');
+            } else throw new Error('file not found');
+          }
+          const targetPath = [DOC_LIBRARY_ROOT, entity, parts[0], parts[1], parts[2]].join('/');
+          await ensureFolderPath(docLibraryDriveId, targetPath);
+          const folder = await getDriveItem(targetPath);
+          const moved1 = await graphFetch("/drives/" + docLibraryDriveId + "/items/" + item.id, {
+            method: 'PATCH', body: JSON.stringify({ parentReference: { id: folder.id } })
+          });
+          moved++;
+          const newUrl = moved1.webUrl || item.webUrl;
+          const ok = await saveCorrectedDocUrl(r.id, d.name, d.url, newUrl);
+          if (!ok) linkNotSaved++;
+        } catch (e) {
+          problems.push(r.requestId + ' / ' + d.name + ': ' + e.message);
+        }
+        done++;
+      }
+    }
+    migLog('Finished. ' + moved + ' of ' + total + ' file(s) moved.' +
+      (linkNotSaved ? '\n' + linkNotSaved + ' link(s) could not be re-saved \u2014 they will still open (the app finds the file by name) and fix themselves when clicked.' : '') +
+      (problems.length ? '\n\nNot moved (' + problems.length + '):\n' + problems.join('\n') : ''));
+    migrationPlan = [];
+    await refreshAll();
+  } catch (e) { migLog('Stopped: ' + e.message + '\n' + moved + ' file(s) moved before the error. Run Scan again to continue.'); }
+  scanBtn.disabled = false;
+}
+
+/* Totals per currency for a list of requests: one tile per currency (SGD, MYR first, then any others),
+   so amounts in different currencies are never added together. Respects the current department filter. */
+function renderCurrencyTotals(elId, rows){
+  const el = document.getElementById(elId);
+  if (!el) return;
+  const totals = {};
+  rows.forEach(r => {
+    const c = r.currency || '—';
+    if (!totals[c]) totals[c] = { sum: 0, count: 0 };
+    totals[c].sum += Number(r.amount || 0);
+    totals[c].count++;
+  });
+  const order = ['SGD', 'MYR'];
+  Object.keys(totals).forEach(c => { if (order.indexOf(c) === -1) order.push(c); });
+  const show = order.filter(c => totals[c] || c === 'SGD' || c === 'MYR');
+  el.innerHTML = show.map(c => {
+    const t = totals[c];
+    const ent = c === 'MYR' ? ' · MY entity' : (c === 'SGD' ? ' · SG entity' : '');
+    return '<div class="currency-total' + (t ? '' : ' ct-empty') + '"><div class="ct-label">Total ' + escapeHtml(c) + escapeHtml(ent) + '</div>' +
+      '<div class="ct-amount">' + escapeHtml(fmtAmount(t ? t.sum : 0, c)) + '</div>' +
+      '<div class="ct-count">' + (t ? t.count : 0) + ' request' + ((t && t.count === 1) ? '' : 's') + '</div></div>';
+  }).join('');
+}
 /* ---- Approvals ---- */
 function renderApprovalsTable(){
   const depts = approverDepartments();
@@ -2033,6 +2196,7 @@ function renderApprovalsTable(){
     .sort((a, b) => (a.submittedDate || '').localeCompare(b.submittedDate || ''));
   const decided = allItemsCache.filter(r => (r.approverEmail || '').toLowerCase() === email && r.approvalDate && (!deptFilter || r.department === deptFilter))
     .sort((a, b) => (b.approvalDate || '').localeCompare(a.approvalDate || ''));
+  renderCurrencyTotals('approvals-totals', pending);
   document.getElementById('count-approvals').textContent = pendingAll.length;
   document.getElementById('count-approvals').classList.toggle('zero', pendingAll.length === 0);
   document.getElementById('approvals-table-body').innerHTML = pending.length ? pending.map(r =>
@@ -2054,6 +2218,7 @@ function renderFinanceTable(){
     .sort((a, b) => (Number(!!b.isUrgent) - Number(!!a.isUrgent)) || (a.approvalDate || '').localeCompare(b.approvalDate || ''));
   const history = allItemsCache.filter(r => r.status === STATUS.PROCESSED && (!deptFilter || r.department === deptFilter))
     .sort((a, b) => (b.financeDecisionDate || '').localeCompare(a.financeDecisionDate || ''));
+  renderCurrencyTotals('finance-totals', pending);
   document.getElementById('count-finance').textContent = pending.length;
   document.getElementById('count-finance').classList.toggle('zero', pending.length === 0);
   document.getElementById('finance-table-body').innerHTML = pending.length ? pending.map(r =>
@@ -2553,7 +2718,11 @@ async function findDocByKnownPaths(savedUrl, name, record){
   const key = '/' + DOC_LIBRARY_ROOT + '/';
   const at = rel.indexOf(key);
   if (at === -1) return null;
-  const parts = rel.slice(at + key.length).split('/').filter(Boolean);   // [period, department, subfolder, file]
+  const parts = rel.slice(at + key.length).split('/').filter(Boolean);   // [entity?, period, department, subfolder, file]
+  // Newer uploads start with an entity folder (MY / SG); older ones start straight at the period.
+  const entityNames = Object.values(ENTITY_FOLDERS);
+  let entity = '';
+  if (parts.length >= 5 && entityNames.indexOf(parts[0]) !== -1) entity = parts.shift();
   if (parts.length < 4) return null;
   const period = parts[0], dept = parts[1], savedSub = parts[2];
   const subs = [savedSub];
@@ -2563,7 +2732,7 @@ async function findDocByKnownPaths(savedUrl, name, record){
   for (const sub of subs) {
     if (!sub || tried.indexOf(sub) !== -1) continue;
     tried.push(sub);
-    const path = [DOC_LIBRARY_ROOT, period, dept, sub, name].join('/');
+    const path = [DOC_LIBRARY_ROOT].concat(entity ? [entity] : [], [period, dept, sub, name]).join('/');
     try {
       const it = await graphFetch("/drives/" + docLibraryDriveId + "/root:/" + encodeURIComponent(path).replace(/%2F/g, '/') + "?$select=name,webUrl");
       if (it && it.webUrl) return it.webUrl;
@@ -2927,7 +3096,7 @@ async function handleSaveDraftEdits(itemId){
   if (!form.department) { showToast('Please choose a department before saving.', 'error'); return; }
   setBusy(btn, true, 'Saving…');
   try {
-    const newDocs = modalContext.editFiles.length ? await uploadFilesForRequest(form.department, form.vendorName, record.requestId, modalContext.editFiles, uploadProgressLabel(btn, 'Uploading')) : [];
+    const newDocs = modalContext.editFiles.length ? await uploadFilesForRequest(form.department, form.vendorName, form.currency, record.requestId, modalContext.editFiles, uploadProgressLabel(btn, 'Uploading')) : [];
     const combinedDocs = (modalContext.editDocs || []).concat(newDocs);
     const approverEmail = form.isUrgent ? (urgentApproverEmail || '') : ((deptApproverMap[form.department] || {}).email || '');
     const patch = Object.assign({}, form, {
@@ -3024,7 +3193,7 @@ async function handleSubmitDraft(itemId){
   const btn = document.getElementById('btn-submit-draft');
   setBusy(btn, true, 'Submitting…');
   try {
-    const newDocs = modalContext.editFiles.length ? await uploadFilesForRequest(form.department, form.vendorName, record.requestId, modalContext.editFiles, uploadProgressLabel(btn, 'Uploading')) : [];
+    const newDocs = modalContext.editFiles.length ? await uploadFilesForRequest(form.department, form.vendorName, form.currency, record.requestId, modalContext.editFiles, uploadProgressLabel(btn, 'Uploading')) : [];
     const combinedDocs = (modalContext.editDocs || []).concat(newDocs);
     const approverEmail = form.isUrgent ? urgentApproverEmail : ((deptApproverMap[form.department] || {}).email || '');
     const historyMsg = form.isUrgent
@@ -3136,7 +3305,7 @@ async function handleWithdrawToDraft(itemId){
       return;
     }
     const docsBefore = parseDocLinks(live.documentLinks);
-    const newDocs = modalContext.editFiles.length ? await uploadFilesForRequest(form.department, form.vendorName, live.requestId, modalContext.editFiles, uploadProgressLabel(btn, 'Uploading')) : [];
+    const newDocs = modalContext.editFiles.length ? await uploadFilesForRequest(form.department, form.vendorName, form.currency, live.requestId, modalContext.editFiles, uploadProgressLabel(btn, 'Uploading')) : [];
     const combinedDocs = (modalContext.editDocs || []).concat(newDocs);
     const approverEmail = form.isUrgent ? (urgentApproverEmail || '') : ((deptApproverMap[form.department] || {}).email || '');
     const changeSummary = describeEdits(live, form, docsBefore, combinedDocs);
@@ -3191,7 +3360,7 @@ async function handleResubmitEdits(itemId){
       return;
     }
     const docsBefore = parseDocLinks(live.documentLinks);
-    const newDocs = modalContext.editFiles.length ? await uploadFilesForRequest(form.department, form.vendorName, live.requestId, modalContext.editFiles, uploadProgressLabel(btn, 'Uploading')) : [];
+    const newDocs = modalContext.editFiles.length ? await uploadFilesForRequest(form.department, form.vendorName, form.currency, live.requestId, modalContext.editFiles, uploadProgressLabel(btn, 'Uploading')) : [];
     const combinedDocs = (modalContext.editDocs || []).concat(newDocs);
     const approverEmail = form.isUrgent ? urgentApproverEmail : ((deptApproverMap[form.department] || {}).email || '');
     const changeSummary = describeEdits(live, form, docsBefore, combinedDocs);
