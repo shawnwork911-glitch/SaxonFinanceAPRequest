@@ -2255,6 +2255,21 @@ async function diagnoseMigration(){
   migLog(out.join('\n'));
   setBusy(btn, false);
 }
+/* Tries the places a file is likely to be, in order: the saved path, the same path without the entity folder,
+   and each with the request ID / company name as the last folder. Returns { item, all } or null. */
+async function findExistingFile(a, r){
+  const subs = [a.parts[2]];
+  if (r.requestId) subs.push(r.requestId);
+  const v = vendorFolderName(r.vendorName); if (v) subs.push(v);
+  const ents = a.pathEntity ? [a.pathEntity, ''] : [''];
+  const tried = {};
+  for (const ent of ents) for (const sub of subs) {
+    const key = ent + '|' + sub; if (tried[key]) continue; tried[key] = 1;
+    const all = (ent ? [ent] : []).concat(a.parts[0], a.parts[1], sub, a.parts[3]);
+    try { return { item: await getDriveItem([DOC_LIBRARY_ROOT].concat(all).join('/')), all }; } catch (e) { /* not here \u2014 try next */ }
+  }
+  return null;
+}
 async function moveOldFiles(){
   if (!isAdminUser() || !migrationPlan.length) return;
   if (!confirm('Move the scanned files into their new folders now? Links on the requests will be updated.')) return;
@@ -2283,16 +2298,17 @@ async function moveOldFiles(){
             item = f.item; a = analysePathParts(f.parts, r);
             if (!a) throw new Error(SKIP);
           } else {
-            const triedPath = curPath(a);
-            try { item = await getDriveItem(triedPath); }
-            catch (e) {
-              // Saved link is stale (file renamed/moved) \u2014 look the file up by name instead.
+            // The saved link may not match where the file really is (e.g. it names an MY/SG folder that
+            // doesn't exist yet, or an AP-number folder that was already renamed), so try the likely places.
+            const loc = await findExistingFile(a, r);
+            if (loc) { item = loc.item; a = analysePathParts(loc.all, r); }
+            else {
               try {
                 const f = await locateByName(d.name, r);
                 item = f.item; a = analysePathParts(f.parts, r);
-              } catch (e2) { throw new Error('not at "' + triedPath + '", and by-name lookup said: ' + e2.message); }
-              if (!a) throw new Error(SKIP);
+              } catch (e2) { throw new Error('not at "' + curPath(a) + '" (or without the entity folder / in the company folder), and by-name lookup said: ' + e2.message); }
             }
+            if (!a) throw new Error(SKIP);
           }
           const body = {};
           if (a.needMove) {
