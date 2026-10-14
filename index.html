@@ -1573,7 +1573,7 @@ function recordToFields(record, colMap){
     const key = DATA_FIELD_MAP[display];
     const internal = colMap[display];
     if (!internal) return; // column missing on the list — skip silently
-    if (key.indexOf('verification') === 0) return; // read-only: owned by whoever fills the SharePoint column
+    if (key.indexOf('verification') === 0 && !record._allowVerificationWrite) return; // normally read-only; only the "Mark as Checked" action writes these
     if (record[key] === undefined) return;
     let value = record[key];
     if (key === 'isUrgent') value = value ? 'Yes' : 'No';
@@ -1838,6 +1838,37 @@ function verifyPill(record){
   if (/^(verified|valid|passed?|ok|approved|matched?|checked|confirmed|complete[d]?)$/.test(l)) cls = 'verify-ok';
   if (/(pending|review|hold|query|follow)/.test(l)) cls = 'verify-warn';
   return '<span class="status-pill ' + cls + '">' + escapeHtml(v) + '</span>';
+}
+function canMarkChecked(record){
+  const v = String(record.verificationStatus || '').trim().toLowerCase();
+  if (v !== 'discrepancy found' && v !== 'incomplete') return false;
+  // Only approvers (the request's assigned approver, its department approver, or the Urgent Payment Approver on urgent requests) and Finance. Requesters can't.
+  const isApprover = (record.approverEmail || '').toLowerCase() === myEmail() ||
+    approverDepartments().includes(record.department) ||
+    (record.isUrgent && isUrgentApprover());
+  return isApprover || isFinanceUser();
+}
+async function handleMarkChecked(itemId){
+  const record = findRecord(itemId);
+  if (!record || !canMarkChecked(record)) return;
+  if (!confirm('Mark this request as Checked? Please make sure you have reviewed the documents and the discrepancy / missing items.')) return;
+  const btn = document.getElementById('btn-mark-checked');
+  setBusy(btn, true, 'Saving…');
+  try {
+    const now = new Date().toISOString();
+    const note = 'Marked as Checked by ' + currentAccount.username + ' (was: ' + record.verificationStatus + ').';
+    await updateRequestItem(record.id, {
+      _allowVerificationWrite: true,
+      verificationStatus: 'Checked',
+      verificationDate: now,
+      verificationNotes: record.verificationNotes ? record.verificationNotes + '\n' + note : note,
+      historyLog: appendHistory(record.historyLog, currentAccount.username + ' marked verification as Checked (was ' + record.verificationStatus + ').')
+    });
+    showToast('Verification status set to Checked.', 'success');
+    const mode = modalContext ? modalContext.mode : 'mine';
+    await refreshAll();
+    openDetail(itemId, mode);
+  } catch (e) { showToast('Could not update verification status: ' + e.message, 'error'); setBusy(btn, false); }
 }
 function urgentTag(record){
   // Solid fill (not the usual bg/fg pill pair) so it stays a visible chip against the
@@ -3006,7 +3037,8 @@ function baseDetailGrid(record){
       '<div><div class="k">Department</div>' + escapeHtml(record.department) + '</div>' +
       '<div><div class="k">Status</div>' + statusPill(record.status) + '</div>' +
       '<div><div class="k">Verification</div>' + verifyPill(record) +
-        (record.verificationDate ? ' <span class="muted small">' + fmtDateTime(record.verificationDate) + '</span>' : '') + '</div>' +
+        (record.verificationDate ? ' <span class="muted small">' + fmtDateTime(record.verificationDate) + '</span>' : '') +
+        (canMarkChecked(record) ? '<div style="margin-top:6px;"><button type="button" class="btn btn-ghost" id="btn-mark-checked" style="padding:5px 12px; font-size:12.5px;" onclick="handleMarkChecked(\'' + record.id + '\')">Mark as Checked</button></div>' : '') + '</div>' +
       (record.verificationNotes ? '<div><div class="k">Verification notes</div>' + escapeHtml(record.verificationNotes) + '</div>' : '<div></div>') +
       '<div><div class="k">Requestor</div>' + escapeHtml(record.requestorName) + ' &lt;' + escapeHtml(record.requestorEmail) + '&gt;</div>' +
       '<div><div class="k">Submitted</div>' + fmtDateTime(record.submittedDate) + '</div>' +
