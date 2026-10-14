@@ -209,16 +209,6 @@
   }
   .file-chip .rm { cursor: pointer; color: var(--bad); font-weight: 700; padding: 0 4px; }
 
-  /* ---- Purchase Order autofill (Operations) ---- */
-  #po-box { border: 1px dashed var(--accent); background: var(--accent-light); border-radius: 8px; padding: 14px 16px; margin-bottom: 18px; }
-  #po-box .po-title { font-weight: 700; font-size: 13.5px; margin-bottom: 2px; }
-  #po-box input[type=file] { margin-top: 8px; background: var(--panel); }
-  .po-chip { background: var(--panel); border: 1px solid var(--line); }
-  .po-chip .po-meta { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-  .po-chip .po-sub { color: var(--sub); font-size: 11.5px; }
-  .po-msg { margin-top: 8px; font-size: 12.5px; }
-  .po-msg.ok { color: var(--good); } .po-msg.warn { color: var(--warn); } .po-msg.err { color: var(--bad); }
-  .autofilled { box-shadow: 0 0 0 2px var(--good-bg); border-color: var(--good) !important; }
   .btn {
     font-size: 13.5px; font-weight: 700; border: none; border-radius: 6px; padding: 10px 18px;
     cursor: pointer; letter-spacing: .01em;
@@ -260,6 +250,10 @@
   .status-pending-finance { background: var(--accent-light); color: var(--accent); }
   .status-pending-info { background: var(--info-bg); color: var(--info); }
   .status-processed { background: var(--good-bg); color: var(--good); }
+  .verify-none { background: var(--line); color: var(--sub); }
+  .verify-ok { background: var(--good-bg); color: var(--good); }
+  .verify-warn { background: var(--warn-bg); color: var(--warn); }
+  .verify-bad { background: var(--bad-bg); color: var(--bad); }
 
   .toolbar-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
   .toolbar-row .filters { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -476,18 +470,10 @@
         </div>
       </div>
 
-      <div id="po-box" style="display:none;">
-        <div class="po-title">Purchase Order autofill</div>
-        <div class="muted small">Upload the PO (PDF). Vendor, Payment Terms, Amount, Currency and Description / Purpose (Item No.) are filled in for you and stay editable. You only need to enter the Document Number and Document Date, and attach the remaining documents. Several POs for the same vendor are combined: amounts are added up and each different Item No. is listed.</div>
-        <input type="file" id="f-po-files" accept="application/pdf,.pdf" multiple>
-        <div class="file-chip-list" id="po-chip-list"></div>
-        <div class="po-msg" id="po-msg"></div>
-      </div>
-
       <div class="grid-2">
         <div class="field-row">
           <label class="field-label">Requesting Department <span class="req">*</span></label>
-          <select class="text-field" id="f-department" onchange="updatePoBoxVisibility()">
+          <select class="text-field" id="f-department">
             <option value="">— choose —</option>
             <option value="Digital Growth &amp; Branding">Digital Growth &amp; Branding</option>
             <option value="Strategic Partnerships &amp; Events">Strategic Partnerships &amp; Events</option>
@@ -586,7 +572,7 @@
         </div>
       </div>
       <table class="data-table">
-        <thead><tr><th>Document Number</th><th>Department</th><th>Vendor</th><th>Amount</th><th>Status</th><th>Due Date</th></tr></thead>
+        <thead><tr><th>Document Number</th><th>Department</th><th>Vendor</th><th>Amount</th><th>Status</th><th>Verification</th><th>Due Date</th></tr></thead>
         <tbody id="mine-table-body"></tbody>
       </table>
     </div>
@@ -641,14 +627,14 @@
       </div>
       <div class="currency-totals" id="finance-totals"></div>
       <table class="data-table">
-        <thead><tr><th>Document Number</th><th>Department</th><th>Requestor</th><th>Vendor</th><th>Amount</th><th>Approved by</th></tr></thead>
+        <thead><tr><th>Document Number</th><th>Department</th><th>Requestor</th><th>Vendor</th><th>Amount</th><th>Verification</th><th>Approved by</th></tr></thead>
         <tbody id="finance-table-body"></tbody>
       </table>
     </div>
     <div class="card">
       <div class="card-head"><h2>Finance History</h2></div>
       <table class="data-table">
-        <thead><tr><th>Document Number</th><th>Department</th><th>Vendor</th><th>Amount</th><th>Outcome</th><th>Decided</th><th>Payment ref.</th></tr></thead>
+        <thead><tr><th>Document Number</th><th>Department</th><th>Vendor</th><th>Amount</th><th>Outcome</th><th>Verification</th><th>Decided</th><th>Payment ref.</th></tr></thead>
         <tbody id="finance-history-body"></tbody>
       </table>
     </div>
@@ -1193,6 +1179,7 @@ const DATA_FIELD_MAP = {
   FinanceReviewer: 'financeReviewer', FinanceDecision: 'financeDecision',
   FinanceDecisionDate: 'financeDecisionDate', FinanceComments: 'financeComments',
   PaymentReference: 'paymentReference', SubmittedDate: 'submittedDate', HistoryLog: 'historyLog',
+  VerificationStatus: 'verificationStatus', VerificationNotes: 'verificationNotes', VerificationDate: 'verificationDate', // set outside this app (e.g. Power Automate) — read-only here
   Comments: 'comments' // JSON array of { at, by, name, text } — see commentsHtml()
 };
 
@@ -1586,6 +1573,7 @@ function recordToFields(record, colMap){
     const key = DATA_FIELD_MAP[display];
     const internal = colMap[display];
     if (!internal) return; // column missing on the list — skip silently
+    if (key.indexOf('verification') === 0) return; // read-only: owned by whoever fills the SharePoint column
     if (record[key] === undefined) return;
     let value = record[key];
     if (key === 'isUrgent') value = value ? 'Yes' : 'No';
@@ -1840,6 +1828,17 @@ function statusPill(status){
   const cls = STATUS_CLASS[status] || 'status-draft';
   return '<span class="status-pill ' + cls + '">' + escapeHtml(status || STATUS.DRAFT) + '</span>';
 }
+/* Verification status: empty column = not checked yet; otherwise show whatever text is in the column. */
+function verifyPill(record){
+  const v = String((record && record.verificationStatus) || '').trim();
+  if (!v) return '<span class="status-pill verify-none">Not checked yet</span>';
+  const l = v.toLowerCase();
+  let cls = 'verify-warn';
+  if (/(not|un|mis|fail|reject|invalid|wrong|discrep|error|dup)/.test(l) && !/^verified$/.test(l)) cls = 'verify-bad';
+  if (/^(verified|valid|passed?|ok|approved|matched?|checked|confirmed|complete[d]?)$/.test(l)) cls = 'verify-ok';
+  if (/(pending|review|hold|query|follow)/.test(l)) cls = 'verify-warn';
+  return '<span class="status-pill ' + cls + '">' + escapeHtml(v) + '</span>';
+}
 function urgentTag(record){
   // Solid fill (not the usual bg/fg pill pair) so it stays a visible chip against the
   // red-tinted row highlight urgent rows also get — a --bad-bg badge would blend into it.
@@ -1905,233 +1904,19 @@ async function snapshotFiles(fileList){
 }
 document.getElementById('f-payment-terms').innerHTML = paymentTermOptionsHtml('');
 refreshDueDate('f');
-['f-vendor','f-amount','f-currency','f-description','f-payment-terms'].forEach(id => {
-  const el = document.getElementById(id);
-  ['input','change'].forEach(ev => el.addEventListener(ev, () => el.classList.remove('autofilled')));
-});
 document.getElementById('f-files').addEventListener('change', async (e) => {
   const picked = await snapshotFiles(e.target.files);
   e.target.value = '';
   for (const f of picked) newRequestFiles.push(f);
   renderNewFileChips();
 });
-
-/* ---------------------------------------------------------------------
-   Purchase Order autofill (Operations department)
-   Reads the PO PDF in the browser (pdf.js), pulls out Vendor, Payment Terms, Currency, Total and
-   the Item No. column, and fills the New Request form. The PO layout is always the same, so the
-   parser works from fixed labels/columns. Nothing is sent anywhere — the file stays in the browser
-   until Save / Submit, where it uploads with the other attachments.
-   --------------------------------------------------------------------- */
-const PO_DEPARTMENT = 'Operations';
-const PDFJS_VERSION = '3.11.174';
-const PDFJS_URL = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/' + PDFJS_VERSION + '/pdf.min.js';
-const PDFJS_WORKER_URL = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/' + PDFJS_VERSION + '/pdf.worker.min.js';
-const poEntries = [];   // [{ file, poNo, vendor, terms, currency, cents, items[] }]
-let pdfjsPromise = null;
-
-function loadPdfJs(){
-  if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
-  if (pdfjsPromise) return pdfjsPromise;
-  pdfjsPromise = new Promise((resolve, reject) => {
-    const sc = document.createElement('script');
-    sc.src = PDFJS_URL;
-    sc.onload = async () => {
-      const lib = window.pdfjsLib;
-      if (!lib) { reject(new Error('PDF reader did not load')); return; }
-      try {
-        // Browsers refuse cross-origin workers, so wrap the CDN worker in a same-origin blob.
-        const code = await (await fetch(PDFJS_WORKER_URL)).text();
-        lib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(new Blob([code], { type: 'text/javascript' }));
-      } catch (e) { lib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL; }
-      resolve(lib);
-    };
-    sc.onerror = () => { pdfjsPromise = null; reject(new Error('Could not load the PDF reader (check your internet connection)')); };
-    document.head.appendChild(sc);
-  });
-  return pdfjsPromise;
-}
-
-/* Rebuild text lines from pdf.js text items: group by y position, order by x. */
-function pdfItemsToLines(items, minX, maxX){
-  const rows = [];
-  items.forEach(it => {
-    if (!it.str || !it.str.trim()) return;
-    const x = it.transform[4], y = it.transform[5];
-    if (x < minX || x >= maxX) return;
-    let row = rows.find(r => Math.abs(r.y - y) <= 3);
-    if (!row) { row = { y, parts: [] }; rows.push(row); }
-    row.parts.push({ x, str: it.str });
-  });
-  rows.sort((a, b) => b.y - a.y);
-  return rows.map(r => r.parts.sort((a, b) => a.x - b.x).map(p => p.str.trim()).join(' ').replace(/\s+/g, ' ').trim());
-}
-
-const toCents = v => Math.round(parseFloat(String(v).replace(/,/g, '')) * 100);
-
-async function parsePoFile(file){
-  const lib = await loadPdfJs();
-  const pdf = await lib.getDocument({ data: await file.arrayBuffer() }).promise;
-  let left = [], full = [], right = [];
-  for (let n = 1; n <= pdf.numPages; n++) {
-    const page = await pdf.getPage(n);
-    const w = page.getViewport({ scale: 1 }).width;
-    const content = await page.getTextContent();
-    left = left.concat(pdfItemsToLines(content.items, 0, w * 0.5));
-    right = right.concat(pdfItemsToLines(content.items, w * 0.6, Infinity));
-    full = full.concat(pdfItemsToLines(content.items, 0, Infinity));
-  }
-  const po = { file, poNo: '', vendor: '', terms: '', currency: '', cents: 0, items: [] };
-  const pick = (lines, re) => { for (const l of lines) { const m = l.match(re); if (m) return m[1].trim(); } return ''; };
-  po.poNo = pick(left, /Purchase Order No\.?\s*:\s*(\S+)/i);
-  po.terms = pick(left, /Payment Terms\s*:\s*(.+)$/i);
-  const vi = left.findIndex(l => /^Vendor\s*:?$/i.test(l));
-  if (vi >= 0) po.vendor = (left.slice(vi + 1).find(l => l && !/^Ship To/i.test(l)) || '').trim();
-  // Total (right-hand box). Last match wins in case of multi-page POs.
-  right.forEach(l => { const m = l.match(/^Total\s+([A-Z]{3})\s+([\d,]+\.\d{2})$/i); if (m) { po.currency = m[1].toUpperCase(); po.cents = toCents(m[2]); } });
-  // Line items: "1 T4848_MYSLR_V26 <description…> 53.000 RECS 4.026 213.38"
-  let lineSum = 0;
-  full.forEach(l => {
-    const m = l.match(/^\d+\s+(\S+)\s+.+?\s[\d,]+\.\d+\s+[A-Za-z]+\s+[\d,]+\.\d+\s+([\d,]+\.\d{2})$/);
-    if (m) { if (!po.items.includes(m[1])) po.items.push(m[1]); lineSum += toCents(m[2]); }
-  });
-  if (!po.cents && lineSum) po.cents = lineSum;
-  po.lineSumMismatch = !!(po.cents && lineSum && Math.abs(po.cents - lineSum) > 5);
-  if (!po.poNo || !po.vendor || !po.cents) throw new Error('does not look like a Saxon purchase order (could not find PO No., Vendor and Total)');
-  return po;
-}
-
-function matchPaymentTermLabel(text){
-  const t = String(text || '').trim().toUpperCase().replace(/\s+/g, ' ');
-  if (!t) return '';
-  for (const g of PAYMENT_TERM_GROUPS) for (const term of g.terms) {
-    if (term.desc.toUpperCase() === t || term.code.toUpperCase() === t) return paymentTermLabel(term);
-  }
-  return '';
-}
-
-function setPoMsg(text, kind){
-  const el = document.getElementById('po-msg');
-  el.textContent = text || '';
-  el.className = 'po-msg' + (kind ? ' ' + kind : '');
-}
-function markAutofilled(ids){
-  ids.forEach(id => { const el = document.getElementById(id); if (el) el.classList.add('autofilled'); });
-}
-function clearAutofillMarks(){
-  document.querySelectorAll('#view-new .autofilled').forEach(el => el.classList.remove('autofilled'));
-}
-
-/* Push the combined PO data into the form. Called whenever a PO is added or removed. */
-function applyPoEntriesToForm(){
-  clearAutofillMarks();
-  if (!poEntries.length) return;
-  const first = poEntries[0];
-  const totalCents = poEntries.reduce((a, p) => a + p.cents, 0);
-  const items = [];
-  poEntries.forEach(p => p.items.forEach(i => { if (!items.includes(i)) items.push(i); }));
-  const filled = [];
-  document.getElementById('f-vendor').value = first.vendor; filled.push('f-vendor');
-  document.getElementById('f-amount').value = (totalCents / 100).toFixed(2); filled.push('f-amount');
-  const curSel = document.getElementById('f-currency');
-  curSel.value = first.currency;
-  if (curSel.value === first.currency) filled.push('f-currency');
-  else { curSel.value = ''; setPoMsg('Currency ' + first.currency + ' is not in the currency list. Please choose it manually.', 'warn'); }
-  document.getElementById('f-description').value = items.join(', '); filled.push('f-description');
-  const label = matchPaymentTermLabel(first.terms);
-  if (label) { document.getElementById('f-payment-terms').value = label; filled.push('f-payment-terms'); }
-  else {
-    document.getElementById('f-payment-terms').value = '';
-    setPoMsg('Payment terms "' + first.terms + '" on the PO do not match a Business Central code. Please select them manually.', 'warn');
-  }
-  refreshDueDate('f');
-  markAutofilled(filled);
-}
-
-function renderPoChips(){
-  const list = document.getElementById('po-chip-list');
-  list.innerHTML = poEntries.map((p, i) =>
-    '<div class="file-chip po-chip"><div class="po-meta"><span><strong>' + escapeHtml(p.poNo) + '</strong> &middot; ' +
-    escapeHtml(p.currency + ' ' + (p.cents / 100).toLocaleString('en-SG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })) + '</span>' +
-    '<span class="po-sub">' + escapeHtml(p.vendor) + (p.items.length ? ' &middot; ' + escapeHtml(p.items.join(', ')) : '') + '</span></div>' +
-    '<span class="rm" onclick="removePo(' + i + ')">Remove</span></div>'
-  ).join('');
-}
-
-/* Can this PO be combined with the ones already loaded? Returns a reason string if not. */
-function poConflict(po){
-  if (poEntries.some(p => p.poNo === po.poNo)) return 'PO ' + po.poNo + ' is already added.';
-  if (!poEntries.length) return '';
-  const f = poEntries[0];
-  if (po.vendor.toUpperCase() !== f.vendor.toUpperCase()) return 'PO ' + po.poNo + ' is for a different vendor (' + po.vendor + '). Raise a separate request for it.';
-  if (po.currency !== f.currency) return 'PO ' + po.poNo + ' is in ' + po.currency + ' but the other PO(s) are in ' + f.currency + '. Raise a separate request for it.';
-  return '';
-}
-
-document.getElementById('f-po-files').addEventListener('change', async (e) => {
-  const picked = Array.from(e.target.files);
-  if (!picked.length) return;
-  const snaps = await snapshotFiles(picked);
-  e.target.value = '';
-  setPoMsg('Reading ' + snaps.length + ' PO file(s)…');
-  const problems = [];
-  let added = 0, mismatchWarn = false, termWarn = false;
-  for (const f of snaps) {
-    try {
-      const po = await parsePoFile(f);
-      const why = poConflict(po);
-      if (why) { problems.push(why); continue; }
-      if (poEntries.length && po.terms.toUpperCase() !== poEntries[0].terms.toUpperCase()) termWarn = true;
-      if (po.lineSumMismatch) mismatchWarn = true;
-      poEntries.push(po);
-      if (!newRequestFiles.includes(f)) newRequestFiles.push(f);   // the PO is also a supporting document
-      added++;
-    } catch (err) {
-      problems.push(f.name + ': ' + err.message);
-    }
-  }
-  renderNewFileChips(); renderPoChips();
-  if (added) applyPoEntriesToForm();
-  const notes = [];
-  if (added) notes.push('Autofilled from ' + poEntries.length + ' PO(s). Please check the details, then enter the Document Number and Document Date.');
-  if (termWarn) notes.push('The POs have different payment terms. The first PO\'s terms were used, so please confirm.');
-  if (mismatchWarn) notes.push('A PO\'s line amounts do not add up to its Total. Please check the amount.');
-  if (problems.length) notes.push(problems.join(' '));
-  if (poEntries.length && document.getElementById('po-msg').className.indexOf('warn') >= 0 && !problems.length && !termWarn && !mismatchWarn) {
-    /* keep the warning set by applyPoEntriesToForm (currency / payment terms) and append the success note */
-    const el = document.getElementById('po-msg'); el.textContent = el.textContent + ' ' + notes.join(' ');
-  } else {
-    setPoMsg(notes.join(' '), problems.length || termWarn || mismatchWarn ? 'warn' : (added ? 'ok' : 'err'));
-  }
-});
-
-function removePo(i){
-  const po = poEntries[i];
-  if (!po) return;
-  poEntries.splice(i, 1);
-  const fi = newRequestFiles.indexOf(po.file);
-  if (fi >= 0) newRequestFiles.splice(fi, 1);
-  renderNewFileChips(); renderPoChips();
-  if (poEntries.length) { setPoMsg(''); applyPoEntriesToForm(); }
-  else { clearAutofillMarks(); setPoMsg('PO removed. The autofilled fields were left as they are — edit or clear them as needed.', 'warn'); }
-}
-function updatePoBoxVisibility(){
-  const on = document.getElementById('f-department').value === PO_DEPARTMENT;
-  document.getElementById('po-box').style.display = on ? '' : 'none';
-}
-
 function renderNewFileChips(){
   const list = document.getElementById('new-file-chip-list');
   list.innerHTML = newRequestFiles.map((f, i) =>
     '<div class="file-chip"><span>' + escapeHtml(f.name) + '</span><span class="rm" onclick="removeNewFile(' + i + ')">Remove</span></div>'
   ).join('');
 }
-function removeNewFile(i){
-  const f = newRequestFiles[i];
-  const pi = poEntries.findIndex(p => p.file === f);
-  if (pi >= 0) { removePo(pi); return; }
-  newRequestFiles.splice(i, 1); renderNewFileChips();
-}
+function removeNewFile(i){ newRequestFiles.splice(i, 1); renderNewFileChips(); }
 function toggleUrgentJustification(){
   const checked = document.getElementById('f-urgent').checked;
   document.getElementById('urgent-justification-row').style.display = checked ? '' : 'none';
@@ -2146,8 +1931,6 @@ function clearNewRequestForm(){
   document.getElementById('f-urgent').checked = false;
   document.getElementById('urgent-justification-row').style.display = 'none';
   newRequestFiles.length = 0;
-  poEntries.length = 0; renderPoChips(); setPoMsg(''); clearAutofillMarks();
-  updatePoBoxVisibility();
   pendingNewRequestId = null;
   renderNewFileChips();
   refreshDueDate('f');
@@ -2297,8 +2080,8 @@ function renderMineTable(){
   body.innerHTML = rows.length ? rows.map(r =>
     '<tr' + urgentRowAttr(r) + ' onclick="openDetail(\'' + r.id + '\',\'mine\')"><td>' + escapeHtml(r.invoiceNumber || '—') + urgentTag(r) + '</td><td>' + escapeHtml(r.department) +
     '</td><td>' + escapeHtml(r.vendorName) + '</td><td>' + fmtAmount(r.amount, r.currency) +
-    '</td><td>' + statusPill(r.status) + '</td><td>' + fmtDate(r.dueDate) + '</td></tr>'
-  ).join('') : '<tr class="empty-row"><td colspan="6">No requests yet.</td></tr>';
+    '</td><td>' + statusPill(r.status) + '</td><td>' + verifyPill(r) + '</td><td>' + fmtDate(r.dueDate) + '</td></tr>'
+  ).join('') : '<tr class="empty-row"><td colspan="7">No requests yet.</td></tr>';
 
   const drafts = mine.filter(r => r.status === STATUS.DRAFT);
   document.getElementById('draft-card').style.display = drafts.length ? '' : 'none';
@@ -2646,13 +2429,13 @@ function renderFinanceTable(){
   document.getElementById('finance-table-body').innerHTML = pending.length ? pending.map(r =>
     '<tr' + urgentRowAttr(r) + ' onclick="openDetail(\'' + r.id + '\',\'finance\')"><td>' + escapeHtml(r.invoiceNumber || '—') + urgentTag(r) + '</td><td>' + escapeHtml(r.department) +
     '</td><td>' + escapeHtml(r.requestorName) + '</td><td>' + escapeHtml(r.vendorName) + '</td><td>' + fmtAmount(r.amount, r.currency) +
-    '</td><td>' + escapeHtml(r.approverEmail) + '</td></tr>'
-  ).join('') : '<tr class="empty-row"><td colspan="6">No requests awaiting Finance review.</td></tr>';
+    '</td><td>' + verifyPill(r) + '</td><td>' + escapeHtml(r.approverEmail) + '</td></tr>'
+  ).join('') : '<tr class="empty-row"><td colspan="7">No requests awaiting Finance review.</td></tr>';
   document.getElementById('finance-history-body').innerHTML = history.length ? history.slice(0, 100).map(r =>
     '<tr' + urgentRowAttr(r) + ' onclick="openDetail(\'' + r.id + '\',\'mine\')"><td>' + escapeHtml(r.invoiceNumber || '—') + urgentTag(r) + '</td><td>' + escapeHtml(r.department) +
     '</td><td>' + escapeHtml(r.vendorName) + '</td><td>' + fmtAmount(r.amount, r.currency) + '</td><td>' + statusPill(r.status) +
-    '</td><td>' + fmtDateTime(r.financeDecisionDate) + '</td><td>' + escapeHtml(r.paymentReference || '—') + '</td></tr>'
-  ).join('') : '<tr class="empty-row"><td colspan="7">No history yet.</td></tr>';
+    '</td><td>' + verifyPill(r) + '</td><td>' + fmtDateTime(r.financeDecisionDate) + '</td><td>' + escapeHtml(r.paymentReference || '—') + '</td></tr>'
+  ).join('') : '<tr class="empty-row"><td colspan="8">No history yet.</td></tr>';
 }
 
 /* ---- Analytics ---- */
@@ -2794,7 +2577,7 @@ function renderTimelineRow(record){
   return '<div class="timeline-row" onclick="openDetail(\'' + record.id + '\',\'mine\')">' +
     '<div class="timeline-row-head">' +
       '<div><strong>' + escapeHtml(record.invoiceNumber || '—') + '</strong>' + urgentTag(record) + ' — ' + escapeHtml(record.vendorName) + ' <span class="muted small">(' + escapeHtml(record.department) + ')</span></div>' +
-      '<div>' + statusPill(record.status) + '</div>' +
+      '<div>' + statusPill(record.status) + ' ' + verifyPill(record) + '</div>' +
     '</div>' +
     '<div class="who">Requested by ' + escapeHtml(record.requestorName) + ' · ' + fmtAmount(record.amount, record.currency) + '</div>' +
     '<div class="stepper">' + stepsHtml + '</div>' +
@@ -3222,6 +3005,9 @@ function baseDetailGrid(record){
     '<div class="detail-grid">' +
       '<div><div class="k">Department</div>' + escapeHtml(record.department) + '</div>' +
       '<div><div class="k">Status</div>' + statusPill(record.status) + '</div>' +
+      '<div><div class="k">Verification</div>' + verifyPill(record) +
+        (record.verificationDate ? ' <span class="muted small">' + fmtDateTime(record.verificationDate) + '</span>' : '') + '</div>' +
+      (record.verificationNotes ? '<div><div class="k">Verification notes</div>' + escapeHtml(record.verificationNotes) + '</div>' : '<div></div>') +
       '<div><div class="k">Requestor</div>' + escapeHtml(record.requestorName) + ' &lt;' + escapeHtml(record.requestorEmail) + '&gt;</div>' +
       '<div><div class="k">Submitted</div>' + fmtDateTime(record.submittedDate) + '</div>' +
       '<div><div class="k">Vendor</div>' + escapeHtml(record.vendorName) + '</div>' +
@@ -4056,7 +3842,6 @@ async function showSignedInUI(){
     setupRoleUI();
     const defaultDept = defaultDepartmentForUser();
     if (defaultDept) document.getElementById('f-department').value = defaultDept;
-    updatePoBoxVisibility();
     if (isAdminUser()) renderAdminTab();
     await refreshAll();
   } catch (e) {
