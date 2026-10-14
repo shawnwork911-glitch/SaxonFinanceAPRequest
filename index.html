@@ -596,14 +596,14 @@
       </div>
       <div class="currency-totals" id="approvals-totals"></div>
       <table class="data-table">
-        <thead><tr><th>Document Number</th><th>Department</th><th>Requestor</th><th>Vendor</th><th>Amount</th><th>Due Date</th></tr></thead>
+        <thead><tr><th>Document Number</th><th>Department</th><th>Requestor</th><th>Vendor</th><th>Amount</th><th>Verification</th><th>Due Date</th></tr></thead>
         <tbody id="approvals-table-body"></tbody>
       </table>
     </div>
     <div class="card">
       <div class="card-head"><h2>My Past Decisions</h2></div>
       <table class="data-table">
-        <thead><tr><th>Document Number</th><th>Department</th><th>Requestor</th><th>Vendor</th><th>Amount</th><th>Decision</th><th>Decided</th></tr></thead>
+        <thead><tr><th>Document Number</th><th>Department</th><th>Requestor</th><th>Vendor</th><th>Amount</th><th>Decision</th><th>Verification</th><th>Decided</th></tr></thead>
         <tbody id="approvals-history-body"></tbody>
       </table>
     </div>
@@ -2407,13 +2407,13 @@ function renderApprovalsTable(){
   document.getElementById('approvals-table-body').innerHTML = pending.length ? pending.map(r =>
     '<tr' + urgentRowAttr(r) + ' onclick="openDetail(\'' + r.id + '\',\'approve\')"><td>' + escapeHtml(r.invoiceNumber || '—') + urgentTag(r) + '</td><td>' + escapeHtml(r.department) +
     '</td><td>' + escapeHtml(r.requestorName) + '</td><td>' + escapeHtml(r.vendorName) + '</td><td>' + fmtAmount(r.amount, r.currency) +
-    '</td><td>' + fmtDate(r.dueDate) + '</td></tr>'
-  ).join('') : '<tr class="empty-row"><td colspan="6">Nothing waiting on your approval.</td></tr>';
+    '</td><td>' + verifyPill(r) + '</td><td>' + fmtDate(r.dueDate) + '</td></tr>'
+  ).join('') : '<tr class="empty-row"><td colspan="7">Nothing waiting on your approval.</td></tr>';
   document.getElementById('approvals-history-body').innerHTML = decided.length ? decided.slice(0, 50).map(r =>
     '<tr' + urgentRowAttr(r) + ' onclick="openDetail(\'' + r.id + '\',\'mine\')"><td>' + escapeHtml(r.invoiceNumber || '—') + urgentTag(r) + '</td><td>' + escapeHtml(r.department) +
     '</td><td>' + escapeHtml(r.requestorName) + '</td><td>' + escapeHtml(r.vendorName) + '</td><td>' + fmtAmount(r.amount, r.currency) +
-    '</td><td>' + statusPill(r.approvalDecision === 'Rejected' ? STATUS.REJECTED_APPROVER : STATUS.PENDING_FINANCE) + '</td><td>' + fmtDateTime(r.approvalDate) + '</td></tr>'
-  ).join('') : '<tr class="empty-row"><td colspan="7">No decisions yet.</td></tr>';
+    '</td><td>' + statusPill(r.approvalDecision === 'Rejected' ? STATUS.REJECTED_APPROVER : STATUS.PENDING_FINANCE) + '</td><td>' + verifyPill(r) + '</td><td>' + fmtDateTime(r.approvalDate) + '</td></tr>'
+  ).join('') : '<tr class="empty-row"><td colspan="8">No decisions yet.</td></tr>';
 }
 
 /* ---- Finance ---- */
