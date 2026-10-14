@@ -1839,6 +1839,20 @@ function verifyPill(record){
   if (/(pending|review|hold|query|follow)/.test(l)) cls = 'verify-warn';
   return '<span class="status-pill ' + cls + '">' + escapeHtml(v) + '</span>';
 }
+function needsVerifyAttention(record){
+  const v = String((record && record.verificationStatus) || '').trim().toLowerCase();
+  return v === 'discrepancy found' || v === 'incomplete';
+}
+/* Table cell: the badge, plus the VerificationNotes underneath when status is Discrepancy Found / Incomplete. */
+function verifyCell(record){
+  let html = verifyPill(record);
+  if (needsVerifyAttention(record)) {
+    const n = String(record.verificationNotes || '').trim();
+    html += '<div class="small" style="margin-top:4px; max-width:240px; white-space:pre-wrap; color:var(--bad);">' +
+      (n ? escapeHtml(n) : '<span class="muted">No notes provided.</span>') + '</div>';
+  }
+  return html;
+}
 function canMarkChecked(record){
   const v = String(record.verificationStatus || '').trim().toLowerCase();
   if (v !== 'discrepancy found' && v !== 'incomplete') return false;
@@ -2111,7 +2125,7 @@ function renderMineTable(){
   body.innerHTML = rows.length ? rows.map(r =>
     '<tr' + urgentRowAttr(r) + ' onclick="openDetail(\'' + r.id + '\',\'mine\')"><td>' + escapeHtml(r.invoiceNumber || '—') + urgentTag(r) + '</td><td>' + escapeHtml(r.department) +
     '</td><td>' + escapeHtml(r.vendorName) + '</td><td>' + fmtAmount(r.amount, r.currency) +
-    '</td><td>' + statusPill(r.status) + '</td><td>' + verifyPill(r) + '</td><td>' + fmtDate(r.dueDate) + '</td></tr>'
+    '</td><td>' + statusPill(r.status) + '</td><td>' + verifyCell(r) + '</td><td>' + fmtDate(r.dueDate) + '</td></tr>'
   ).join('') : '<tr class="empty-row"><td colspan="7">No requests yet.</td></tr>';
 
   const drafts = mine.filter(r => r.status === STATUS.DRAFT);
@@ -2438,12 +2452,12 @@ function renderApprovalsTable(){
   document.getElementById('approvals-table-body').innerHTML = pending.length ? pending.map(r =>
     '<tr' + urgentRowAttr(r) + ' onclick="openDetail(\'' + r.id + '\',\'approve\')"><td>' + escapeHtml(r.invoiceNumber || '—') + urgentTag(r) + '</td><td>' + escapeHtml(r.department) +
     '</td><td>' + escapeHtml(r.requestorName) + '</td><td>' + escapeHtml(r.vendorName) + '</td><td>' + fmtAmount(r.amount, r.currency) +
-    '</td><td>' + verifyPill(r) + '</td><td>' + fmtDate(r.dueDate) + '</td></tr>'
+    '</td><td>' + verifyCell(r) + '</td><td>' + fmtDate(r.dueDate) + '</td></tr>'
   ).join('') : '<tr class="empty-row"><td colspan="7">Nothing waiting on your approval.</td></tr>';
   document.getElementById('approvals-history-body').innerHTML = decided.length ? decided.slice(0, 50).map(r =>
     '<tr' + urgentRowAttr(r) + ' onclick="openDetail(\'' + r.id + '\',\'mine\')"><td>' + escapeHtml(r.invoiceNumber || '—') + urgentTag(r) + '</td><td>' + escapeHtml(r.department) +
     '</td><td>' + escapeHtml(r.requestorName) + '</td><td>' + escapeHtml(r.vendorName) + '</td><td>' + fmtAmount(r.amount, r.currency) +
-    '</td><td>' + statusPill(r.approvalDecision === 'Rejected' ? STATUS.REJECTED_APPROVER : STATUS.PENDING_FINANCE) + '</td><td>' + verifyPill(r) + '</td><td>' + fmtDateTime(r.approvalDate) + '</td></tr>'
+    '</td><td>' + statusPill(r.approvalDecision === 'Rejected' ? STATUS.REJECTED_APPROVER : STATUS.PENDING_FINANCE) + '</td><td>' + verifyCell(r) + '</td><td>' + fmtDateTime(r.approvalDate) + '</td></tr>'
   ).join('') : '<tr class="empty-row"><td colspan="8">No decisions yet.</td></tr>';
 }
 
@@ -2460,12 +2474,12 @@ function renderFinanceTable(){
   document.getElementById('finance-table-body').innerHTML = pending.length ? pending.map(r =>
     '<tr' + urgentRowAttr(r) + ' onclick="openDetail(\'' + r.id + '\',\'finance\')"><td>' + escapeHtml(r.invoiceNumber || '—') + urgentTag(r) + '</td><td>' + escapeHtml(r.department) +
     '</td><td>' + escapeHtml(r.requestorName) + '</td><td>' + escapeHtml(r.vendorName) + '</td><td>' + fmtAmount(r.amount, r.currency) +
-    '</td><td>' + verifyPill(r) + '</td><td>' + escapeHtml(r.approverEmail) + '</td></tr>'
+    '</td><td>' + verifyCell(r) + '</td><td>' + escapeHtml(r.approverEmail) + '</td></tr>'
   ).join('') : '<tr class="empty-row"><td colspan="7">No requests awaiting Finance review.</td></tr>';
   document.getElementById('finance-history-body').innerHTML = history.length ? history.slice(0, 100).map(r =>
     '<tr' + urgentRowAttr(r) + ' onclick="openDetail(\'' + r.id + '\',\'mine\')"><td>' + escapeHtml(r.invoiceNumber || '—') + urgentTag(r) + '</td><td>' + escapeHtml(r.department) +
     '</td><td>' + escapeHtml(r.vendorName) + '</td><td>' + fmtAmount(r.amount, r.currency) + '</td><td>' + statusPill(r.status) +
-    '</td><td>' + verifyPill(r) + '</td><td>' + fmtDateTime(r.financeDecisionDate) + '</td><td>' + escapeHtml(r.paymentReference || '—') + '</td></tr>'
+    '</td><td>' + verifyCell(r) + '</td><td>' + fmtDateTime(r.financeDecisionDate) + '</td><td>' + escapeHtml(r.paymentReference || '—') + '</td></tr>'
   ).join('') : '<tr class="empty-row"><td colspan="8">No history yet.</td></tr>';
 }
 
@@ -3039,7 +3053,10 @@ function baseDetailGrid(record){
       '<div><div class="k">Verification</div>' + verifyPill(record) +
         (record.verificationDate ? ' <span class="muted small">' + fmtDateTime(record.verificationDate) + '</span>' : '') +
         (canMarkChecked(record) ? '<div style="margin-top:6px;"><button type="button" class="btn btn-ghost" id="btn-mark-checked" style="padding:5px 12px; font-size:12.5px;" onclick="handleMarkChecked(\'' + record.id + '\')">Mark as Checked</button></div>' : '') + '</div>' +
-      (record.verificationNotes ? '<div><div class="k">Verification notes</div>' + escapeHtml(record.verificationNotes) + '</div>' : '<div></div>') +
+      (needsVerifyAttention(record)
+        ? '<div class="full" style="padding:10px 12px; border-radius:8px; background:var(--bad-bg); color:var(--bad);"><div class="k" style="color:var(--bad);">Verification notes</div><div style="white-space:pre-wrap;">' +
+            (record.verificationNotes ? escapeHtml(record.verificationNotes) : 'No notes provided.') + '</div></div>'
+        : (record.verificationNotes ? '<div class="full"><div class="k">Verification notes</div><div style="white-space:pre-wrap;">' + escapeHtml(record.verificationNotes) + '</div></div>' : '')) +
       '<div><div class="k">Requestor</div>' + escapeHtml(record.requestorName) + ' &lt;' + escapeHtml(record.requestorEmail) + '&gt;</div>' +
       '<div><div class="k">Submitted</div>' + fmtDateTime(record.submittedDate) + '</div>' +
       '<div><div class="k">Vendor</div>' + escapeHtml(record.vendorName) + '</div>' +
