@@ -2185,6 +2185,29 @@ async function locateByName(name, record){
   }
   return found[0];
 }
+/* Finds (or creates) a folder and returns its id. The move needs the destination folder's id, and the
+   company folders don't exist yet for older periods, so each missing level is created on the way down. */
+let folderIdCache = {};
+async function ensureFolderId(fullPath){
+  const base = "/drives/" + docLibraryDriveId + "/items/";
+  if (!folderIdCache['']) folderIdCache[''] = (await graphFetch("/drives/" + docLibraryDriveId + "/root?$select=id")).id;
+  let parentId = folderIdCache[''], built = '';
+  for (const seg of fullPath.split('/').filter(Boolean)) {
+    built = built ? built + '/' + seg : seg;
+    if (folderIdCache[built]) { parentId = folderIdCache[built]; continue; }
+    let id;
+    try {
+      id = (await graphFetch(base + parentId + ":/" + encodeURIComponent(seg) + "?$select=id")).id;     // already there
+    } catch (e) {
+      const made = await graphFetch(base + parentId + "/children", {                                    // not there \u2014 create it
+        method: 'POST', body: JSON.stringify({ name: seg, folder: {}, "@microsoft.graph.conflictBehavior": "fail" })
+      });
+      id = made.id;
+    }
+    folderIdCache[built] = id; parentId = id;
+  }
+  return parentId;
+}
 async function moveOldFiles(){
   if (!isAdminUser() || !migrationPlan.length) return;
   if (!confirm('Move the scanned files into their new folders now? Links on the requests will be updated.')) return;
@@ -2192,7 +2215,8 @@ async function moveOldFiles(){
   runBtn.disabled = true; scanBtn.disabled = true;
   const total = migrationPlan.reduce((n, p) => n + p.items.length, 0);
   const SKIP = 'already up to date';
-  let done = 0, changed = 0, skipped = 0, linkNotSaved = 0;
+  folderIdCache = {};
+  let done = 0, changed = 0, skipped = 0, linkNotSaved = 0, failStreak = 0, stage = '', stopped = false;
   const problems = [];
   try {
     if (!docLibraryDriveId) await resolveDocLibraryDrive();
@@ -2201,7 +2225,9 @@ async function moveOldFiles(){
       const r = p.record;
       for (const it of p.items) {
         const d = p.docs[it.idx];
-        migLog('Working on file ' + (done + 1) + ' of ' + total + '\u2026 ' + changed + ' updated' + (problems.length ? ', ' + problems.length + ' problem(s)' : '') + '\n' + d.name);
+        migLog('Working on file ' + (done + 1) + ' of ' + total + '\u2026 ' + changed + ' updated' + (problems.length ? ', ' + problems.length + ' problem(s)' : '') + '\n' + d.name +
+          (problems.length ? '\n\nLatest problem: ' + problems[problems.length - 1] : ''));
+        stage = 'reading the file';
         try {
           let a = it, item = null;
           const curPath = x => [DOC_LIBRARY_ROOT].concat(x.pathEntity ? [x.pathEntity] : [], x.parts).join('/');
@@ -2220,20 +2246,33 @@ async function moveOldFiles(){
           }
           const body = {};
           if (a.needMove) {
+            stage = 'creating/reading the target folder';
             const targetPath = [DOC_LIBRARY_ROOT, a.entity, a.parts[0], a.parts[1], a.company].join('/');
-            await ensureFolderPath(docLibraryDriveId, targetPath);
-            body.parentReference = { id: (await getDriveItem(targetPath)).id };
+            body.parentReference = { id: await ensureFolderId(targetPath) };
           }
           if (a.needRename) body.name = prefixedName(a.prefix, item.name);
+          stage = 'moving the file';
           const res = await graphFetch("/drives/" + docLibraryDriveId + "/items/" + item.id, { method: 'PATCH', body: JSON.stringify(body) });
+          failStreak = 0;
           changed++;
           const ok = await saveCorrectedDocUrl(r.id, d.name, d.url, res.webUrl || item.webUrl, a.needRename ? (res.name || item.name) : '');
           if (!ok) linkNotSaved++;
         } catch (e) {
-          if (e.message === SKIP) skipped++; else problems.push(r.requestId + ' / ' + d.name + ': ' + e.message);
+          if (e.message === SKIP) { skipped++; failStreak = 0; }
+          else {
+            problems.push(r.requestId + ' / ' + d.name + ' (while ' + stage + '): ' + e.message);
+            // If the first few files all fail, something systematic is wrong \u2014 stop and show why instead of grinding through all of them.
+            if (++failStreak >= 5 && changed === 0) { stopped = true; break; }
+          }
         }
         done++;
       }
+      if (stopped) break;
+    }
+    if (stopped) {
+      migLog('Stopped after ' + failStreak + ' failures in a row \u2014 nothing was changed.\n\nReasons:\n' + problems.join('\n'));
+      scanBtn.disabled = false;
+      return;
     }
     migLog('Finished. ' + changed + ' of ' + total + ' file(s) updated' + (skipped ? ', ' + skipped + ' already fine' : '') + '.' +
       (linkNotSaved ? '\n' + linkNotSaved + ' link(s) could not be re-saved \u2014 they will still open (the app finds the file by name) and fix themselves when clicked.' : '') +
