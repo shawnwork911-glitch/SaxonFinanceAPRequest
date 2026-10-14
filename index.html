@@ -739,10 +739,13 @@
     <div class="card" id="admin-migrate-card">
       <div class="card-head">
         <div>
-          <h2>Move Old Files to Entity Folders</h2>
-          <div class="muted small">One-off tool. Finds files saved in the old layout (<code>Period/Department/Company</code>) and moves each one into <code>MY</code> or <code>SG</code> based on its request's currency, then updates the saved links. Run <strong>Scan</strong> first &mdash; nothing moves until you click Move. Old empty folders are left in place.</div>
+          <h2>Move Old Files to New Folders</h2>
+          <div class="muted small">One-off tool. Moves files saved in the old layout (<code>Period/Department/Company</code>, or folders named after the AP number like <code>AP-20260925-uwxj</code>) into <code>Entity/Period/Department/Company</code>. The entity (<code>MY</code> / <code>SG</code>) comes from the request's currency and the company folder from its vendor name; saved links are updated. Run <strong>Scan</strong> first &mdash; nothing moves until you click Move. Old empty folders are left in place.</div>
         </div>
       </div>
+      <label class="small" style="display:flex; gap:8px; align-items:center; margin:0 0 10px;">
+        <input type="checkbox" id="migrate-rename"> Also rename the files to <code>Entity_Period_Department_Company_filename</code> (leave unticked to keep file names as they are)
+      </label>
       <div class="btn-row" style="justify-content:flex-start;">
         <button type="button" class="btn btn-ghost" id="migrate-scan-btn" onclick="scanOldFiles()">Scan</button>
         <button type="button" class="btn btn-primary" id="migrate-run-btn" onclick="moveOldFiles()" disabled>Move files</button>
@@ -1601,7 +1604,22 @@ async function ensureFolderPath(driveId, fullPath){
     built = built ? built + '/' + seg : seg;
   }
 }
-async function uploadOneFile(driveId, folderPath, file, dupIndex){
+const RENAME_FILES_ON_UPLOAD = false;   // true = new uploads are also named Entity_Period_Department_Company_name
+/* File names (only when renaming is switched on) follow the same order as the folders: Entity_Period_Department_Company_original-name,
+   e.g. "MY_22th Oct 2026_Operations_ABC Sdn Bhd_invoice_20261014-101500.pdf". */
+function fileNamePrefix(entity, period, dept, company){
+  const clean = x => String(x || '').replace(/[#%*:<>?\/\\{|}"]/g, '_').replace(/\s+/g, ' ').trim();
+  return [entity, clean(period), clean(dept), clean(company).slice(0, 40).trim()].join('_') + '_';
+}
+function prefixedName(prefix, name){
+  const dot = name.lastIndexOf('.');
+  const base = dot > 0 ? name.slice(0, dot) : name;
+  const ext = dot > 0 ? name.slice(dot) : '';
+  const room = Math.max(30, 200 - prefix.length - ext.length);        // keep well under SharePoint's name limit
+  const b = base.length > room ? base.slice(0, room - 20) + base.slice(-20) : base;   // always keep the timestamp tail
+  return prefix + b + ext;
+}
+async function uploadOneFile(driveId, folderPath, file, dupIndex, namePrefix){
   const safeName = file.name.replace(/[#%*:<>?/\\{|}]/g, '_');
   // Keep the file's actual name, but stamp a timestamp behind it (before the extension) so
   // re-uploading a file with the same name never silently overwrites an earlier one.
@@ -1610,7 +1628,8 @@ async function uploadOneFile(driveId, folderPath, file, dupIndex){
   const ext = dot > 0 ? safeName.slice(dot) : '';
   // dupIndex keeps two attachments with the same name (e.g. two "invoice.pdf") from
   // overwriting each other when they're uploaded within the same second.
-  const stampedName = base + '_' + fileTimestampSuffix() + (dupIndex ? '_' + (dupIndex + 1) : '') + ext;
+  const plainName = base + '_' + fileTimestampSuffix() + (dupIndex ? '_' + (dupIndex + 1) : '') + ext;
+  const stampedName = namePrefix ? prefixedName(namePrefix, plainName) : plainName;
   const encodedPath = encodeURIComponent(folderPath + '/' + stampedName).replace(/%2F/g, '/');
   let buf;
   try { buf = await file.arrayBuffer(); }
@@ -1668,6 +1687,7 @@ async function uploadFilesForRequest(department, vendorName, currency, requestId
   const entityFolder = entityFolderFor(currency);
   // Files are grouped by vendor; fall back to the request ID if no vendor name was entered yet (e.g. an early draft).
   const subFolder = vendorFolderName(vendorName) || requestId;
+  const namePrefix = RENAME_FILES_ON_UPLOAD ? fileNamePrefix(entityFolder, periodFolder, department, subFolder) : '';
   // dests[0] is the main Finance Documents copy (its links are what the request stores);
   // any further entries are extra copies — see DEPT_UPLOAD_DESTINATIONS.
   const dests = uploadDestinationsFor(department).map(d => {
@@ -1703,7 +1723,7 @@ async function uploadFilesForRequest(department, vendorName, currency, requestId
         const t = tasks[next++];
         const f = files[t.fileIndex], d = dests[t.destIndex];
         try {
-          const doc = await uploadOneFile(d.driveId, d.folderPath, f, dupIndex[t.fileIndex]);
+          const doc = await uploadOneFile(d.driveId, d.folderPath, f, dupIndex[t.fileIndex], namePrefix);
           if (t.destIndex === 0) results[t.fileIndex] = doc;
           const hits = uploadedFileCache.get(f) || {};
           hits[d.cacheKey] = doc;
@@ -2055,31 +2075,56 @@ function renderMineTable(){
 }
 
 /* ---------------------------------------------------------------------
-   One-off migration: move files saved in the old layout (Period/Department/Company/file)
-   into the entity layout (Entity/Period/Department/Company/file), entity chosen from each
-   request's currency. Admin only. Scan = read-only preview; Move = does the work.
+   One-off migration: bring files saved in the old layout up to the new folder format:
+     Period/Department/Company or Period/Department/AP-number
+       ->  Entity/Period/Department/Company     (entity from the request's currency, company = vendor name)
+   Optionally (tick the box) files are also renamed to Entity_Period_Department_Company_original-name.
+   Admin only. Scan = read-only preview; Move = does the work. Safe to run more than once.
    --------------------------------------------------------------------- */
-let migrationPlan = [];   // [{ record, docs, items:[{ idx, parts }] }]
+let migrationPlan = [];   // [{ record, docs, items:[{ idx, ... }] }]
 function financeRelParts(url){
   let rel = '';
   try { rel = decodeURIComponent(new URL(url, location.href).pathname); } catch (e) { return null; }
   const key = '/' + DOC_LIBRARY_ROOT + '/';
   const at = rel.indexOf(key);
   if (at === -1) return null;
-  return rel.slice(at + key.length).split('/').filter(Boolean);   // [period, department, subfolder, file]
+  return rel.slice(at + key.length).split('/').filter(Boolean);   // [entity?, period, department, subfolder, file]
 }
 function migLog(text){ document.getElementById('migrate-log').textContent = text; }
+function migRenameOn(){ const c = document.getElementById('migrate-rename'); return !!(c && c.checked); }
+/* What (if anything) a saved file still needs, judged from its path parts and its request's currency. */
+function analysePathParts(all, record){
+  let parts = all.slice(), pathEntity = '';
+  if (parts.length >= 5 && Object.values(ENTITY_FOLDERS).indexOf(parts[0]) !== -1) pathEntity = parts.shift();
+  if (parts.length < 4) return null;                                  // [period, department, subfolder, file]
+  const entity = entityFolderFor(record.currency);
+  // Oldest uploads sit in a folder named after the AP number (AP-20260925-uwxj) instead of the company.
+  // Those go into the company (vendor) folder, when the request has a vendor name.
+  let company = parts[2];
+  if (/^AP-\d{8}-[a-z0-9]+$/i.test(company)) company = vendorFolderName(record.vendorName) || company;
+  const prefix = fileNamePrefix(entity, parts[0], parts[1], company);
+  const needMove = !pathEntity || company !== parts[2];
+  const needRename = migRenameOn() && parts[3].indexOf(prefix) !== 0;
+  if (!needMove && !needRename) return null;
+  return { parts, pathEntity, entity, company, prefix, needMove, needRename };
+}
+function analyseFile(url, record){
+  const parts = financeRelParts(url);
+  return parts ? analysePathParts(parts, record) : null;
+}
 function buildMigrationPlan(){
-  const entityNames = Object.values(ENTITY_FOLDERS);
   const plan = [];
   allItemsCache.forEach(r => {
     const docs = parseDocLinks(r.documentLinks);
     const items = [];
     docs.forEach((d, idx) => {
-      if (!d || !d.url || !isFinanceDocUrl(d.url)) return;
-      const parts = financeRelParts(d.url);
-      if (!parts || parts.length < 4 || entityNames.indexOf(parts[0]) !== -1) return;   // unreadable, or already in an entity folder
-      items.push({ idx, parts });
+      if (!d || !d.url) return;
+      if (isFinanceDocUrl(d.url)) {
+        const a = analyseFile(d.url, r);
+        if (a) items.push(Object.assign({ idx }, a));
+      } else if (/Doc\.aspx|sourcedoc=/i.test(d.url)) {
+        items.push({ idx, lookup: true });   // Excel/Word links carry no folder path \u2014 found by name when moving
+      }
     });
     if (items.length) plan.push({ record: r, docs, items });
   });
@@ -2090,16 +2135,25 @@ async function scanOldFiles(){
   const btn = document.getElementById('migrate-scan-btn');
   setBusy(btn, true, 'Scanning…');
   try {
-    await refreshAll();   // make sure we plan from the latest records
+    await refreshAll();   // plan from the latest records
     migrationPlan = buildMigrationPlan();
-    const counts = { MY: 0, SG: 0 }, reqs = { MY: 0, SG: 0 };
-    migrationPlan.forEach(p => { const e = entityForCurrency(p.record.currency); counts[e] += p.items.length; reqs[e]++; });
-    const total = counts.MY + counts.SG;
+    let moves = 0, renames = 0, total = 0, apFolders = 0, lookups = 0; const byEnt = { MY: 0, SG: 0 }; const samples = [];
+    migrationPlan.forEach(p => p.items.forEach(it => {
+      total++;
+      if (it.lookup) { lookups++; return; }
+      if (it.company !== it.parts[2]) apFolders++;
+      if (it.needMove) { moves++; byEnt[entityForCurrency(p.record.currency)]++; }
+      if (it.needRename) renames++;
+      if (samples.length < 3) samples.push('  ' + [it.pathEntity || '(no entity)', it.parts[0], it.parts[1], it.parts[2]].join(' / ') + '\n  \u2192 ' + [it.entity, it.parts[0], it.parts[1], it.company].join(' / '));
+    }));
     migLog(total
-      ? 'Found ' + total + ' file(s) in the old layout:\n' +
-        '  \u2192 MY: ' + counts.MY + ' file(s) from ' + reqs.MY + ' request(s)\n' +
-        '  \u2192 SG: ' + counts.SG + ' file(s) from ' + reqs.SG + ' request(s)\n\nClick "Move files" to start.'
-      : 'Nothing to move \u2014 every saved file is already in an entity folder.');
+      ? total + ' file(s) need checking:\n' +
+        '  \u2022 ' + moves + ' to move to a new folder (MY: ' + byEnt.MY + ', SG: ' + byEnt.SG + ')' +
+        (apFolders ? ', of which ' + apFolders + ' are in an AP-number folder (e.g. AP-20260925-uwxj) and go into the company-name folder' : '') + '\n' +
+        (migRenameOn() ? '  \u2022 ' + renames + ' to rename to the new file-name format\n' : '') +
+        (lookups ? '  \u2022 ' + lookups + ' Excel/Word link(s) with no folder path \u2014 looked up by name when you click Move\n' : '') +
+        '\nExamples:\n' + samples.join('\n\n') + '\n\nClick "Move files" to start.'
+      : 'Nothing to do \u2014 every saved file is already in its entity / company folder.');
     document.getElementById('migrate-run-btn').disabled = !total;
   } catch (e) { migLog('Scan failed: ' + e.message); }
   setBusy(btn, false);
@@ -2107,57 +2161,86 @@ async function scanOldFiles(){
 async function getDriveItem(path){
   return graphFetch("/drives/" + docLibraryDriveId + "/root:/" + encodeURIComponent(path).replace(/%2F/g, '/') + "?$select=id,name,webUrl");
 }
+/* Finds a file by its exact name anywhere in Finance Documents and reads its folder path from SharePoint. */
+async function locateByName(name, record){
+  const norm = x => String(x || '').trim().toLowerCase();
+  const q = String(name).replace(/'/g, "''");
+  const res = await graphFetch("/drives/" + docLibraryDriveId + "/root/search(q='" + encodeURIComponent(q) + "')?$select=id,name&$top=200");
+  const hits = (res.value || []).filter(it => norm(it.name) === norm(name));
+  const found = [];
+  for (const h of hits) {
+    const full = await graphFetch("/drives/" + docLibraryDriveId + "/items/" + h.id + "?$select=id,name,webUrl,parentReference");
+    const pp = String((full.parentReference && full.parentReference.path) || '');
+    const at = pp.indexOf('root:');
+    if (at === -1) continue;
+    const folders = decodeURIComponent(pp.slice(at + 5)).split('/').filter(Boolean);
+    if (folders[0] !== DOC_LIBRARY_ROOT) continue;
+    found.push({ item: full, parts: folders.slice(1).concat(full.name) });
+  }
+  if (!found.length) throw new Error('file not found');
+  if (found.length > 1) {
+    const pref = found.filter(f => f.parts.indexOf(record.requestId) !== -1 || f.parts.indexOf(vendorFolderName(record.vendorName)) !== -1);
+    if (pref.length === 1) return pref[0];
+    throw new Error('more than one file with this name');
+  }
+  return found[0];
+}
 async function moveOldFiles(){
   if (!isAdminUser() || !migrationPlan.length) return;
-  if (!confirm('Move the scanned files into their MY / SG folders now? Links on the requests will be updated.')) return;
+  if (!confirm('Move the scanned files into their new folders now? Links on the requests will be updated.')) return;
   const runBtn = document.getElementById('migrate-run-btn'), scanBtn = document.getElementById('migrate-scan-btn');
   runBtn.disabled = true; scanBtn.disabled = true;
   const total = migrationPlan.reduce((n, p) => n + p.items.length, 0);
-  let done = 0, moved = 0, linkNotSaved = 0;
+  const SKIP = 'already up to date';
+  let done = 0, changed = 0, skipped = 0, linkNotSaved = 0;
   const problems = [];
   try {
     if (!docLibraryDriveId) await resolveDocLibraryDrive();
     if (!docLibraryDriveId) throw new Error('Could not find the "' + SP_DOC_LIBRARY_NAME + '" document library.');
     for (const p of migrationPlan) {
-      const r = p.record, entity = entityFolderFor(r.currency);
+      const r = p.record;
       for (const it of p.items) {
         const d = p.docs[it.idx];
-        migLog('Moving ' + (done + 1) + ' of ' + total + '\u2026 ' + (moved ? moved + ' moved' : '') + (problems.length ? ', ' + problems.length + ' problem(s)' : '') + '\n' + d.name);
+        migLog('Working on file ' + (done + 1) + ' of ' + total + '\u2026 ' + changed + ' updated' + (problems.length ? ', ' + problems.length + ' problem(s)' : '') + '\n' + d.name);
         try {
-          let parts = it.parts, item = null;
-          try { item = await getDriveItem([DOC_LIBRARY_ROOT].concat(parts).join('/')); }
-          catch (e) {
-            // Saved link is stale (file renamed/moved) \u2014 look the file up by name instead.
-            const found = await findFinanceDocUrl(d.name, d.url, r);
-            const fp = found ? financeRelParts(found) : null;
-            if (fp && fp.length >= 4 && Object.values(ENTITY_FOLDERS).indexOf(fp[0]) === -1) {
-              parts = fp; item = await getDriveItem([DOC_LIBRARY_ROOT].concat(parts).join('/'));
-            } else if (fp && Object.values(ENTITY_FOLDERS).indexOf(fp[0]) !== -1) {
-              throw new Error('already in an entity folder');
-            } else throw new Error('file not found');
+          let a = it, item = null;
+          const curPath = x => [DOC_LIBRARY_ROOT].concat(x.pathEntity ? [x.pathEntity] : [], x.parts).join('/');
+          if (it.lookup) {
+            const f = await locateByName(d.name, r);
+            item = f.item; a = analysePathParts(f.parts, r);
+            if (!a) throw new Error(SKIP);
+          } else {
+            try { item = await getDriveItem(curPath(a)); }
+            catch (e) {
+              // Saved link is stale (file renamed/moved) \u2014 look the file up by name instead.
+              const f = await locateByName(d.name, r);
+              item = f.item; a = analysePathParts(f.parts, r);
+              if (!a) throw new Error(SKIP);
+            }
           }
-          const targetPath = [DOC_LIBRARY_ROOT, entity, parts[0], parts[1], parts[2]].join('/');
-          await ensureFolderPath(docLibraryDriveId, targetPath);
-          const folder = await getDriveItem(targetPath);
-          const moved1 = await graphFetch("/drives/" + docLibraryDriveId + "/items/" + item.id, {
-            method: 'PATCH', body: JSON.stringify({ parentReference: { id: folder.id } })
-          });
-          moved++;
-          const newUrl = moved1.webUrl || item.webUrl;
-          const ok = await saveCorrectedDocUrl(r.id, d.name, d.url, newUrl);
+          const body = {};
+          if (a.needMove) {
+            const targetPath = [DOC_LIBRARY_ROOT, a.entity, a.parts[0], a.parts[1], a.company].join('/');
+            await ensureFolderPath(docLibraryDriveId, targetPath);
+            body.parentReference = { id: (await getDriveItem(targetPath)).id };
+          }
+          if (a.needRename) body.name = prefixedName(a.prefix, item.name);
+          const res = await graphFetch("/drives/" + docLibraryDriveId + "/items/" + item.id, { method: 'PATCH', body: JSON.stringify(body) });
+          changed++;
+          const ok = await saveCorrectedDocUrl(r.id, d.name, d.url, res.webUrl || item.webUrl, a.needRename ? (res.name || item.name) : '');
           if (!ok) linkNotSaved++;
         } catch (e) {
-          problems.push(r.requestId + ' / ' + d.name + ': ' + e.message);
+          if (e.message === SKIP) skipped++; else problems.push(r.requestId + ' / ' + d.name + ': ' + e.message);
         }
         done++;
       }
     }
-    migLog('Finished. ' + moved + ' of ' + total + ' file(s) moved.' +
+    migLog('Finished. ' + changed + ' of ' + total + ' file(s) updated' + (skipped ? ', ' + skipped + ' already fine' : '') + '.' +
       (linkNotSaved ? '\n' + linkNotSaved + ' link(s) could not be re-saved \u2014 they will still open (the app finds the file by name) and fix themselves when clicked.' : '') +
-      (problems.length ? '\n\nNot moved (' + problems.length + '):\n' + problems.join('\n') : ''));
+      (problems.length ? '\n\nNot changed (' + problems.length + '):\n' + problems.join('\n') : ''));
     migrationPlan = [];
     await refreshAll();
-  } catch (e) { migLog('Stopped: ' + e.message + '\n' + moved + ' file(s) moved before the error. Run Scan again to continue.'); }
+  } catch (e) { migLog('Stopped: ' + e.message + '\n' + changed + ' file(s) updated before the error. Run Scan again to continue.'); }
   scanBtn.disabled = false;
 }
 
@@ -2691,20 +2774,20 @@ function docAnchorHtml(d, recordId){
 }
 /* When a link had gone stale (file moved/renamed), save the corrected URL back onto the request so
    the stored link is fixed for good. Best-effort: silently skipped if the person can't edit the item. */
-async function saveCorrectedDocUrl(recordId, name, oldUrl, newUrl){
+async function saveCorrectedDocUrl(recordId, name, oldUrl, newUrl, newName){
   if (!recordId || !newUrl || newUrl === oldUrl) return false;
   try {
     const live = await fetchCurrentRecord(recordId);
     const docs = parseDocLinks(live.documentLinks);
     let changed = false;
-    docs.forEach(d => { if (d.name === name && d.url !== newUrl) { d.url = newUrl; changed = true; } });
+    docs.forEach(d => { if (d.name === name && (d.url !== newUrl || (newName && d.name !== newName))) { d.url = newUrl; if (newName) d.name = newName; changed = true; } });
     if (!changed) return false;
     const json = JSON.stringify(docs);
     await updateRequestItem(recordId, { documentLinks: json });
     const cached = findRecord(recordId);
     if (cached) cached.documentLinks = json;
     if (modalContext && modalContext.record && modalContext.record.id === recordId) modalContext.record.documentLinks = json;
-    if (modalContext && modalContext.editDocs) modalContext.editDocs.forEach(d => { if (d.name === name) d.url = newUrl; });
+    if (modalContext && modalContext.editDocs) modalContext.editDocs.forEach(d => { if (d.name === name) { d.url = newUrl; if (newName) d.name = newName; } });
     return true;
   } catch (e) { return false; }
 }
