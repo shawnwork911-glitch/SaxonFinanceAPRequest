@@ -749,6 +749,7 @@
       <div class="btn-row" style="justify-content:flex-start;">
         <button type="button" class="btn btn-ghost" id="migrate-scan-btn" onclick="scanOldFiles()">Scan</button>
         <button type="button" class="btn btn-primary" id="migrate-run-btn" onclick="moveOldFiles()" disabled>Move files</button>
+        <button type="button" class="btn btn-ghost" id="migrate-diag-btn" onclick="diagnoseMigration()">Check first file</button>
       </div>
       <pre id="migrate-log" class="small" style="white-space:pre-wrap; margin:12px 0 0; color:var(--sub);"></pre>
     </div>
@@ -2165,7 +2166,9 @@ async function getDriveItem(path){
 async function locateByName(name, record){
   const norm = x => String(x || '').trim().toLowerCase();
   const q = String(name).replace(/'/g, "''");
-  const res = await graphFetch("/drives/" + docLibraryDriveId + "/root/search(q='" + encodeURIComponent(q) + "')?$select=id,name&$top=200");
+  let res;
+  try { res = await graphFetch("/drives/" + docLibraryDriveId + "/root/search(q='" + encodeURIComponent(q) + "')?$select=id,name&$top=200"); }
+  catch (e) { throw new Error('search failed (' + e.message + ')'); }
   const hits = (res.value || []).filter(it => norm(it.name) === norm(name));
   const found = [];
   for (const h of hits) {
@@ -2208,6 +2211,50 @@ async function ensureFolderId(fullPath){
   }
   return parentId;
 }
+/* Pinpoints why a file can't be found: walks the first file's saved path folder by folder, shows where it
+   stops, lists what is actually in that folder, and searches the library for the file name. Read-only. */
+async function diagnoseMigration(){
+  if (!isAdminUser()) return;
+  const btn = document.getElementById('migrate-diag-btn');
+  setBusy(btn, true, 'Checking…');
+  const out = [];
+  try {
+    if (!migrationPlan.length) { await refreshAll(); migrationPlan = buildMigrationPlan(); }
+    const p = migrationPlan.find(x => x.items.some(i => !i.lookup));
+    if (!p) { migLog('Nothing to check \u2014 no files with a folder path need moving.'); setBusy(btn, false); return; }
+    const it = p.items.find(i => !i.lookup), d = p.docs[it.idx];
+    if (!docLibraryDriveId) await resolveDocLibraryDrive();
+    const enc = x => encodeURIComponent(x).replace(/%2F/g, '/');
+    const dr = await graphFetch("/drives/" + docLibraryDriveId + "?$select=name,webUrl");
+    out.push('Library used: ' + dr.name + '\n  ' + dr.webUrl);
+    out.push('Request: ' + p.record.requestId + '   File: ' + d.name);
+    out.push('Saved link: ' + decodeURIComponent(d.url));
+    const segs = [DOC_LIBRARY_ROOT].concat(it.pathEntity ? [it.pathEntity] : [], it.parts);
+    out.push('\nWalking the saved path:');
+    let ok = '';
+    for (const seg of segs) {
+      const next = ok ? ok + '/' + seg : seg;
+      try { await getDriveItem(next); ok = next; out.push('  found    ' + seg); }
+      catch (e) {
+        out.push('  MISSING  ' + seg + '   (' + e.message.slice(0, 80) + ')');
+        try {
+          const kids = await graphFetch("/drives/" + docLibraryDriveId + (ok ? "/root:/" + enc(ok) + ":" : "/root") + "/children?$select=name&$top=200");
+          const names = (kids.value || []).map(k => k.name);
+          out.push('  "' + (ok || '(library root)') + '" actually contains ' + names.length + ' item(s): ' + (names.slice(0, 40).join(' | ') || '(empty)'));
+        } catch (e2) { out.push('  (could not list that folder: ' + e2.message.slice(0, 80) + ')'); }
+        break;
+      }
+    }
+    out.push('\nSearching the library for the file name:');
+    try {
+      const res = await graphFetch("/drives/" + docLibraryDriveId + "/root/search(q='" + encodeURIComponent(d.name.replace(/'/g, "''")) + "')?$select=name,webUrl&$top=20");
+      const hits = (res.value || []);
+      out.push('  ' + hits.length + ' result(s)' + hits.slice(0, 5).map(h => '\n  - ' + h.name + '\n    ' + decodeURIComponent(h.webUrl)).join(''));
+    } catch (e) { out.push('  search failed: ' + e.message.slice(0, 120)); }
+  } catch (e) { out.push('Check failed: ' + e.message); }
+  migLog(out.join('\n'));
+  setBusy(btn, false);
+}
 async function moveOldFiles(){
   if (!isAdminUser() || !migrationPlan.length) return;
   if (!confirm('Move the scanned files into their new folders now? Links on the requests will be updated.')) return;
@@ -2236,11 +2283,14 @@ async function moveOldFiles(){
             item = f.item; a = analysePathParts(f.parts, r);
             if (!a) throw new Error(SKIP);
           } else {
-            try { item = await getDriveItem(curPath(a)); }
+            const triedPath = curPath(a);
+            try { item = await getDriveItem(triedPath); }
             catch (e) {
               // Saved link is stale (file renamed/moved) \u2014 look the file up by name instead.
-              const f = await locateByName(d.name, r);
-              item = f.item; a = analysePathParts(f.parts, r);
+              try {
+                const f = await locateByName(d.name, r);
+                item = f.item; a = analysePathParts(f.parts, r);
+              } catch (e2) { throw new Error('not at "' + triedPath + '", and by-name lookup said: ' + e2.message); }
               if (!a) throw new Error(SKIP);
             }
           }
