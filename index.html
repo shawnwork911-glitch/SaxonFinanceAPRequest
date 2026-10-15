@@ -3714,6 +3714,23 @@ function renderModalBody(record, mode){
         '<button type="button" class="btn btn-gold" onclick="handleFinanceDecision(\'process\')">Mark as processed / paid</button>' +
       '</div>';
   }
+  if (mode === 'mine' && record.status === STATUS.PROCESSED && isFinanceUser()) {
+    html += '<hr class="section-divider">' +
+      '<div class="field-hint" style="margin-bottom:8px;">This request has already been processed. Finance can still correct the payment reference and Finance comments; every amendment is recorded in the History log.</div>' +
+      '<div class="btn-row"><button type="button" class="btn btn-gold" onclick="openDetail(\'' + record.id + '\',\'finance-amend\')">Amend payment details</button></div>';
+  }
+  if (mode === 'finance-amend') {
+    html += '<hr class="section-divider">' +
+      '<div class="field-hint" style="margin-bottom:10px; padding:10px 12px; border-radius:8px; background:var(--warn-bg); color:var(--warn);">Amending a processed request. The status stays <strong>Processed</strong>; only the payment reference and Finance comments change.</div>' +
+      '<div class="field-row"><label class="field-label">Payment reference</label>' +
+      '<input class="text-field" id="amend-payment-ref" value="' + escapeHtml(record.paymentReference || '') + '" placeholder="e.g. bank transaction ID"></div>' +
+      '<div class="field-row"><label class="field-label">Finance comments</label>' +
+      '<textarea class="text-field" id="amend-finance-comments">' + escapeHtml(record.financeComments || '') + '</textarea></div>' +
+      '<div class="btn-row">' +
+        '<button type="button" class="btn btn-ghost" onclick="openDetail(\'' + record.id + '\',\'mine\')">Cancel</button>' +
+        '<button type="button" class="btn btn-primary" id="btn-save-amend" onclick="handleFinanceAmend(\'' + record.id + '\')">Save amendment</button>' +
+      '</div>';
+  }
   if (mode === 'mine' && canEditSubmitted(record)) {
     html += '<hr class="section-divider">' +
       '<div class="field-hint" style="margin-bottom:8px;">Need to correct something? You can edit the details and attachments while this request is ' +
@@ -4152,6 +4169,33 @@ async function handleFinanceDecision(decision){
     closeModal();
     await refreshAll();
   } catch (e) { showToast('Could not record Finance decision: ' + e.message, 'error'); }
+}
+async function handleFinanceAmend(itemId){
+  const record = findRecord(itemId);
+  if (!record) return;
+  if (!isFinanceUser()) { showToast('Only the Finance team can amend processed requests.', 'error'); return; }
+  if (record.status !== STATUS.PROCESSED) { showToast('Only processed requests can be amended here.', 'error'); return; }
+  const newRef = (document.getElementById('amend-payment-ref').value || '').trim();
+  const newComments = (document.getElementById('amend-finance-comments').value || '').trim();
+  const oldRef = String(record.paymentReference || '').trim();
+  const oldComments = String(record.financeComments || '').trim();
+  if (newRef === oldRef && newComments === oldComments) { showToast('No changes to save.', 'error'); return; }
+  const btn = document.getElementById('btn-save-amend');
+  setBusy(btn, true, 'Saving…');
+  try {
+    const changes = [];
+    if (newRef !== oldRef) changes.push('Payment ref: "' + oldRef + '" → "' + newRef + '"');
+    if (newComments !== oldComments) changes.push('Finance comments: "' + oldComments + '" → "' + newComments + '"');
+    await updateRequestItem(record.id, {
+      paymentReference: newRef,
+      financeComments: newComments,
+      historyLog: appendHistory(record.historyLog, currentAccount.username + ' (Finance) amended the processed request. ' + changes.join('; '))
+    });
+    showToast('Amendment saved.', 'success');
+    await refreshAll();
+    openDetail(itemId, 'mine');
+  } catch (e) { showToast('Could not save amendment: ' + e.message, 'error'); }
+  setBusy(btn, false);
 }
 async function notifyRequestorOfFinanceRejection(record, comment){
   if (!record.requestorEmail) return;
