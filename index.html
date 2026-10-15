@@ -1857,10 +1857,11 @@ function statusPill(status){
   const cls = STATUS_CLASS[status] || 'status-draft';
   return '<span class="status-pill ' + cls + '">' + escapeHtml(status || STATUS.DRAFT) + '</span>';
 }
-/* Once Finance has processed a request, its verification counts as Checked, whatever the column
+/* Once Finance has rejected a request its verification counts as Not Needed, and once processed, Checked, whatever the column
    says (the original text/notes are kept in SharePoint and in the detail view). */
 function verifyStatusOf(record){
   if (record && record.status === STATUS.PROCESSED) return 'Checked';
+  if (record && record.status === STATUS.REJECTED_FINANCE) return 'Not Needed';
   return String((record && record.verificationStatus) || '').trim();
 }
 /* Verification status: empty column = not checked yet; otherwise show whatever text is in the column. */
@@ -4105,6 +4106,17 @@ async function handleFinanceDecision(decision){
         patch.verificationDate = now;
         patch.verificationNotes = record.verificationNotes ? record.verificationNotes + '\n' + note : note;
         patch.historyLog = appendHistory(patch.historyLog, 'Verification set to Checked' + (vs ? ' (was ' + vs + ')' : '') + ' on processing.');
+      }
+    }
+    if (decision === 'reject') {
+      const vs = String(record.verificationStatus || '').trim();
+      if (vs.toLowerCase() !== 'not needed') {
+        const note = 'Auto-set to Not Needed when Finance rejected the request (' + currentAccount.username + ')' + (vs ? ' (was: ' + vs + ').' : '.');
+        patch._allowVerificationWrite = true;
+        patch.verificationStatus = 'Not Needed';
+        patch.verificationDate = nowIso();
+        patch.verificationNotes = record.verificationNotes ? record.verificationNotes + '\n' + note : note;
+        patch.historyLog = appendHistory(patch.historyLog, 'Verification set to Not Needed' + (vs ? ' (was ' + vs + ')' : '') + ' on rejection.');
       }
     }
     await updateRequestItem(record.id, patch);
