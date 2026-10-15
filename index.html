@@ -1332,11 +1332,22 @@ async function resolveSiteAndList(){
 /* Uploads go to the "Finance Documents" folder inside the "Process Improvement" document
    library — a separate library from the site's default "Documents", so it needs its own
    drive lookup rather than the "/sites/{siteId}/drive" shorthand. */
+let docLibraryWebUrl = '';   // the "Process Improvement" library's own URL, used to build direct file links
+/* For non-Office files (PNG, JPG, ...) Graph returns the item's *properties page*
+   (.../Forms/DispForm.aspx?ID=n) as webUrl instead of the file itself. Build the direct
+   path-based URL from the library URL + the file's library-relative path so the browser
+   opens/previews the file. Office files and PDFs (already direct links) are left alone. */
+function viewableUrl(webUrl, libPath){
+  if (!webUrl || !/DispForm\.aspx/i.test(webUrl) || !docLibraryWebUrl || !libPath) return webUrl;
+  return docLibraryWebUrl.replace(/\/+$/, '') + '/' + encodeURIComponent(libPath).replace(/%2F/g, '/');
+}
 async function resolveDocLibraryDrive(){
-  const drives = await graphFetch("/sites/" + siteId + "/drives?$select=id,name");
+  const drives = await graphFetch("/sites/" + siteId + "/drives?$select=id,name,webUrl");
   driveIdsByName = {};
   (drives.value || []).forEach(d => { if (d.name) driveIdsByName[d.name.toLowerCase()] = d.id; });
   docLibraryDriveId = driveIdsByName[SP_DOC_LIBRARY_NAME.toLowerCase()] || null;
+  const libDrive = (drives.value || []).find(d => d.id === docLibraryDriveId);
+  docLibraryWebUrl = (libDrive && libDrive.webUrl) || '';
   try { const def = await graphFetch("/sites/" + siteId + "/drive?$select=id,name"); defaultDriveId = def.id; }
   catch (e) { defaultDriveId = null; }
 }
@@ -1676,7 +1687,7 @@ async function uploadOneFile(driveId, folderPath, file, dupIndex, namePrefix){
     "/drives/" + driveId + "/root:/" + encodedPath + ":/content?@microsoft.graph.conflictBehavior=replace",
     { method: 'PUT', body: buf, headers: { 'Content-Type': file.type || 'application/octet-stream' } }
   );
-  return { name: item.name || stampedName, url: item.webUrl };
+  return { name: item.name || stampedName, url: viewableUrl(item.webUrl, folderPath + '/' + (item.name || stampedName)) };
 }
 /* Entity = which company the request belongs to, worked out from the currency (same rule as the
    holiday calendar): MYR -> Malaysia entity, every other currency -> Singapore entity.
@@ -3255,7 +3266,7 @@ async function findDocByKnownPaths(savedUrl, name, record){
     const path = [DOC_LIBRARY_ROOT].concat(entity ? [entity] : [], [period, dept, sub, name]).join('/');
     try {
       const it = await graphFetch("/drives/" + docLibraryDriveId + "/root:/" + encodeURIComponent(path).replace(/%2F/g, '/') + "?$select=name,webUrl");
-      if (it && it.webUrl) return it.webUrl;
+      if (it && it.webUrl) return viewableUrl(it.webUrl, path);
     } catch (e) { /* not at this path — try the next layout */ }
   }
   return null;
@@ -3280,8 +3291,20 @@ async function findFinanceDocUrl(name, savedUrl, record){
   const hits = [];
   for (const q of queries) {
     try {
-      const res = await graphFetch("/drives/" + docLibraryDriveId + "/root/search(q='" + encodeURIComponent(q) + "')?$select=name,webUrl&$top=200");
-      (res.value || []).forEach(it => { if (it.webUrl && norm(it.name) === norm(name)) hits.push(it.webUrl); });
+      const res = await graphFetch("/drives/" + docLibraryDriveId + "/root/search(q='" + encodeURIComponent(q) + "')?$select=id,name,webUrl&$top=200");
+      for (const it of (res.value || [])) {
+        if (!it.webUrl || norm(it.name) !== norm(name)) continue;
+        let u = it.webUrl;
+        if (/DispForm\.aspx/i.test(u)) {   // properties-page link (e.g. PNG) — rebuild as a direct file link
+          try {
+            const full = await graphFetch("/drives/" + docLibraryDriveId + "/items/" + it.id + "?$select=name,parentReference");
+            const pp = String((full.parentReference && full.parentReference.path) || '');
+            const at = pp.indexOf('root:');
+            if (at !== -1) u = viewableUrl(u, decodeURIComponent(pp.slice(at + 5)).replace(/^\/+/, '') + '/' + full.name);
+          } catch (e2) { /* keep the original link */ }
+        }
+        hits.push(u);
+      }
       if (!hits.length) console.warn('[doc link] no exact match for query:', q, '(' + (res.value || []).length + ' results)');
     } catch (e) { console.warn('[doc link] search failed for query:', q, e && e.message); }
     if (hits.length) break;
