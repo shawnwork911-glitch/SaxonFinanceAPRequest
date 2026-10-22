@@ -4076,6 +4076,8 @@ async function handleApprovalDecision(decision){
         if (mv.failed) { fileWarn = true; toastMsg = 'Approved, but ' + mv.failed + ' attachment(s) could not be moved to the approval-date folder (' + mv.firstError + '). An admin can fix this with Admin \u2192 Move Old Files.'; }
       } catch (e) { fileWarn = true; toastMsg = 'Approved, but the attachments could not be moved to the approval-date folder (' + e.message + '). An admin can fix this with Admin \u2192 Move Old Files.'; }
       await notifyFinanceOfApproval(Object.assign({}, record, patch));
+    } else if (decision === 'reject' && !record.isUrgent) {
+      await notifyRequestorOfApproverRejection(Object.assign({}, record, patch), comment);
     } else if (decision === 'reject' && record.isUrgent && patch.approverEmail) {
       // Fell back to the department approver — that's effectively a new request in their queue.
       await notifyApproverOfNewRequest(Object.assign({}, record, patch));
@@ -4226,7 +4228,9 @@ async function handleFinanceDecision(decision){
       }
     }
     await updateRequestItem(record.id, patch);
-    if (decision === 'info') {
+    if (decision === 'process') {
+      await notifyRequestorOfProcessed(Object.assign({}, record, patch), comment, paymentRef);
+    } else if (decision === 'info') {
       await notifyRequestorOfInfoRequest(Object.assign({}, record, patch), comment);
     } else if (decision === 'reject') {
       await notifyRequestorOfFinanceRejection(Object.assign({}, record, patch), comment);
@@ -4262,6 +4266,48 @@ async function handleFinanceAmend(itemId){
     openDetail(itemId, 'mine');
   } catch (e) { showToast('Could not save amendment: ' + e.message, 'error'); }
   setBusy(btn, false);
+}
+async function notifyRequestorOfProcessed(record, comment, paymentRef){
+  if (!record.requestorEmail) return;
+  try {
+    const subject = '[AP Request] ' + record.requestId + ' — approved and processed by Finance';
+    const lines = [
+      'Finance has approved and processed request ' + escapeHtml(record.requestId) + '.',
+      '',
+      'Department: ' + escapeHtml(record.department),
+      'Vendor: ' + escapeHtml(record.vendorName),
+      'Amount: ' + escapeHtml(fmtAmount(record.amount, record.currency)),
+      paymentRef ? 'Payment reference: ' + escapeHtml(paymentRef) : '',
+      comment ? '<strong>Finance\'s comment:</strong> ' + escapeHtml(comment) : '',
+      '',
+      '<a href="' + escapeHtml(APP_URL) + '">Open the AP Request System</a>, go to My Requests and open this request to view the details.'
+    ].filter(line => line !== '');
+    await sendGraphMail([record.requestorEmail], subject, lines);
+  } catch (e) {
+    // Non-fatal — the Finance decision itself already succeeded; just flag that the email didn't go out.
+    showToast('Request processed, but the notification email could not be sent: ' + e.message, 'error');
+  }
+}
+async function notifyRequestorOfApproverRejection(record, comment){
+  if (!record.requestorEmail) return;
+  try {
+    const subject = '[AP Request] ' + record.requestId + ' — rejected by approver';
+    const lines = [
+      'Your request ' + escapeHtml(record.requestId) + ' was rejected by ' + escapeHtml(record.approverEmail || 'the approver') + '.',
+      '',
+      'Department: ' + escapeHtml(record.department),
+      'Vendor: ' + escapeHtml(record.vendorName),
+      'Amount: ' + escapeHtml(fmtAmount(record.amount, record.currency)),
+      '',
+      '<strong>Approver\'s comment:</strong> ' + escapeHtml(comment || '—'),
+      '',
+      '<a href="' + escapeHtml(APP_URL) + '">Open the AP Request System</a>, go to My Requests and open this request to view the details or make changes and resubmit.'
+    ].filter(line => line !== '');
+    await sendGraphMail([record.requestorEmail], subject, lines);
+  } catch (e) {
+    // Non-fatal — the rejection itself already succeeded; just flag that the email didn't go out.
+    showToast('Request rejected, but the notification email could not be sent: ' + e.message, 'error');
+  }
 }
 async function notifyRequestorOfFinanceRejection(record, comment){
   if (!record.requestorEmail) return;
