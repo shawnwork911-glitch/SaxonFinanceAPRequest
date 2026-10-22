@@ -771,7 +771,7 @@
       <div class="card-head">
         <div>
           <h2>Move Old Files to New Folders</h2>
-          <div class="muted small">One-off tool. Moves files saved in the old layout (<code>Period/Department/Company</code>, or folders named after the AP number like <code>AP-20260925-uwxj</code>) into <code>Entity/Period/Department/Company</code>. The entity (<code>MY</code> / <code>SG</code>) comes from the request's currency and the company folder from its vendor name; saved links are updated. Run <strong>Scan</strong> first &mdash; nothing moves until you click Move. Old empty folders are left in place.</div>
+          <div class="muted small">One-off tool. Moves files saved in the old layout (<code>Period/Department/Company</code>, or folders named after the AP number like <code>AP-20260925-uwxj</code>) into <code>Entity/Period/Department/Company</code>, where <code>Period</code> is the semi-monthly folder of the request's <strong>approval date</strong> (requests not yet approved are left where they are and move automatically when approved). The entity (<code>MY</code> / <code>SG</code>) comes from the request's currency and the company folder from its vendor name; saved links are updated. Run <strong>Scan</strong> first &mdash; nothing moves until you click Move. Old empty folders are left in place.</div>
         </div>
       </div>
       <label class="small" style="display:flex; gap:8px; align-items:center; margin:0 0 10px;">
@@ -878,8 +878,11 @@
       default "Documents" library) — that library must already exist;
       the app creates the Finance Documents/PeriodFolder/Department/VendorName
       subfolders on its own the first time they're needed. PeriodFolder is a
-      semi-monthly cutoff folder (e.g. "12th Sep 2026", "22th Sep 2026") —
-      see getPeriodFolderName(). Operations requests are ALSO copied to
+      semi-monthly cutoff folder (e.g. "12th Sep 2026", "22th Sep 2026") based
+      on the request's APPROVAL date — see getPeriodFolderName(). Until a
+      request is approved its files wait in "Pending Approval"; approving it
+      moves them into the right period folder (moveFilesToApprovalFolder()).
+      Operations requests are ALSO copied to
       Documents/4.PURCHASE ORDER/AP INVOICE/z Direct From AP HTML/VendorName
       (vendor folder only) — see DEPT_UPLOAD_DESTINATIONS.
    4. Fill in the values below. */
@@ -1713,6 +1716,10 @@ function getPeriodFolderName(date){
   }
   return '12th ' + monthNames[month] + ' ' + year;
 }
+/* Files are filed by APPROVAL date, but a request is uploaded before anyone has approved it. So new uploads
+   wait in this holding folder (Entity/Pending Approval/Department/Company) and are moved into the period folder
+   of the approval date the moment the approver approves - see moveFilesToApprovalFolder(). */
+const PENDING_FOLDER = 'Pending Approval';
 const MAX_FILE_BYTES = 250 * 1024 * 1024; // Graph's single-request upload limit
 const UPLOAD_CONCURRENCY = 3;              // a few at a time: faster than one-by-one, gentle enough to avoid throttling
 // Remembers which File objects already made it to SharePoint, so if a save fails part-way
@@ -1730,7 +1737,7 @@ function vendorFolderName(vendorName){
 }
 async function uploadFilesForRequest(department, vendorName, currency, requestId, files, onProgress){
   if (!files.length) return [];
-  const periodFolder = getPeriodFolderName();
+  const periodFolder = PENDING_FOLDER;   // moved to the approval-date period folder on approval
   const entityFolder = entityFolderFor(currency);
   // Files are grouped by vendor; fall back to the request ID if no vendor name was entered yet (e.g. an early draft).
   const subFolder = vendorFolderName(vendorName) || requestId;
@@ -2426,8 +2433,15 @@ function financeRelParts(url){
 }
 function migLog(text){ document.getElementById('migrate-log').textContent = text; }
 function migRenameOn(){ const c = document.getElementById('migrate-rename'); return !!(c && c.checked); }
-/* What (if anything) a saved file still needs, judged from its path parts and its request's currency. */
-function analysePathParts(all, record){
+/* The period folder a request's files belong in: the semi-monthly cutoff folder of its APPROVAL date.
+   Returns '' while the request is not approved (its files stay where they are / in the holding folder). */
+function approvalPeriodFor(record){
+  if (!record || record.approvalDecision !== 'Approved') return '';
+  const t = Date.parse(record.approvalDate);
+  return isNaN(t) ? '' : getPeriodFolderName(new Date(t));
+}
+/* What (if anything) a saved file still needs, judged from its path parts, its request's currency and approval date. */
+function analysePathParts(all, record, opts){
   let parts = all.slice(), pathEntity = '';
   if (parts.length >= 5 && Object.values(ENTITY_FOLDERS).indexOf(parts[0]) !== -1) pathEntity = parts.shift();
   if (parts.length < 4) return null;                                  // [period, department, subfolder, file]
@@ -2436,11 +2450,13 @@ function analysePathParts(all, record){
   // Those go into the company (vendor) folder, when the request has a vendor name.
   let company = parts[2];
   if (/^AP-\d{8}-[a-z0-9]+$/i.test(company)) company = vendorFolderName(record.vendorName) || company;
-  const prefix = fileNamePrefix(entity, parts[0], parts[1], company);
-  const needMove = !pathEntity || company !== parts[2];
-  const needRename = migRenameOn() && parts[3].indexOf(prefix) !== 0;
+  const period = approvalPeriodFor(record) || parts[0];                // approved -> approval-date period; otherwise leave the period alone
+  const prefix = fileNamePrefix(entity, period, parts[1], company);
+  const wantRename = opts && 'rename' in opts ? opts.rename : migRenameOn();
+  const needMove = !pathEntity || company !== parts[2] || period !== parts[0];
+  const needRename = wantRename && parts[3].indexOf(prefix) !== 0;
   if (!needMove && !needRename) return null;
-  return { parts, pathEntity, entity, company, prefix, needMove, needRename };
+  return { parts, pathEntity, entity, company, period, prefix, needMove, needRename };
 }
 function analyseFile(url, record){
   const parts = financeRelParts(url);
@@ -2471,23 +2487,25 @@ async function scanOldFiles(){
   try {
     await refreshAll();   // plan from the latest records
     migrationPlan = buildMigrationPlan();
-    let moves = 0, renames = 0, total = 0, apFolders = 0, lookups = 0; const byEnt = { MY: 0, SG: 0 }; const samples = [];
+    let moves = 0, renames = 0, total = 0, apFolders = 0, lookups = 0, periodMoves = 0; const byEnt = { MY: 0, SG: 0 }; const samples = [];
     migrationPlan.forEach(p => p.items.forEach(it => {
       total++;
       if (it.lookup) { lookups++; return; }
       if (it.company !== it.parts[2]) apFolders++;
       if (it.needMove) { moves++; byEnt[entityForCurrency(p.record.currency)]++; }
+      if (it.period !== it.parts[0]) periodMoves++;
       if (it.needRename) renames++;
-      if (samples.length < 3) samples.push('  ' + [it.pathEntity || '(no entity)', it.parts[0], it.parts[1], it.parts[2]].join(' / ') + '\n  \u2192 ' + [it.entity, it.parts[0], it.parts[1], it.company].join(' / '));
+      if (samples.length < 3) samples.push('  ' + [it.pathEntity || '(no entity)', it.parts[0], it.parts[1], it.parts[2]].join(' / ') + '\n  \u2192 ' + [it.entity, it.period, it.parts[1], it.company].join(' / '));
     }));
     migLog(total
       ? total + ' file(s) need checking:\n' +
         '  \u2022 ' + moves + ' to move to a new folder (MY: ' + byEnt.MY + ', SG: ' + byEnt.SG + ')' +
         (apFolders ? ', of which ' + apFolders + ' are in an AP-number folder (e.g. AP-20260925-uwxj) and go into the company-name folder' : '') + '\n' +
+        (periodMoves ? '  \u2022 ' + periodMoves + ' to file under the period folder of the request\'s approval date\n' : '') +
         (migRenameOn() ? '  \u2022 ' + renames + ' to rename to the new file-name format\n' : '') +
         (lookups ? '  \u2022 ' + lookups + ' Excel/Word link(s) with no folder path \u2014 looked up by name when you click Move\n' : '') +
         '\nExamples:\n' + samples.join('\n\n') + '\n\nClick "Move files" to start.'
-      : 'Nothing to do \u2014 every saved file is already in its entity / company folder.');
+      : 'Nothing to do \u2014 every saved file is already in the right entity / approval-date period / company folder.');
     document.getElementById('migrate-run-btn').disabled = !total;
   } catch (e) { migLog('Scan failed: ' + e.message); }
   setBusy(btn, false);
@@ -2646,7 +2664,7 @@ async function moveOldFiles(){
           const body = {};
           if (a.needMove) {
             stage = 'creating/reading the target folder';
-            const targetPath = [DOC_LIBRARY_ROOT, a.entity, a.parts[0], a.parts[1], a.company].join('/');
+            const targetPath = [DOC_LIBRARY_ROOT, a.entity, a.period, a.parts[1], a.company].join('/');
             body.parentReference = { id: await ensureFolderId(targetPath) };
           }
           if (a.needRename) body.name = prefixedName(a.prefix, item.name);
@@ -2680,6 +2698,48 @@ async function moveOldFiles(){
     await refreshAll();
   } catch (e) { migLog('Stopped: ' + e.message + '\n' + changed + ' file(s) updated before the error. Run Scan again to continue.'); }
   scanBtn.disabled = false;
+}
+
+/* Called right after an approver approves: moves the request's Finance Documents files from the holding folder
+   (or wherever they are) into Entity/<period of the approval date>/Department/Company, and saves the new links.
+   Throws only for setup problems; per-file failures are counted and reported, never block the approval itself. */
+async function moveFilesToApprovalFolder(record, approvalIso){
+  const live = await fetchCurrentRecord(record.id);
+  const docs = parseDocLinks(live.documentLinks);
+  if (!docs.some(d => d && d.url && isFinanceDocUrl(d.url))) return { moved: 0, failed: 0, firstError: '' };
+  const rec = Object.assign({}, live, { approvalDecision: 'Approved', approvalDate: approvalIso });
+  const opts = { rename: RENAME_FILES_ON_UPLOAD };
+  if (!docLibraryDriveId) await resolveDocLibraryDrive();
+  if (!docLibraryDriveId) throw new Error('Could not find the "' + SP_DOC_LIBRARY_NAME + '" document library.');
+  folderIdCache = {};
+  let moved = 0, failed = 0, firstError = '';
+  for (const d of docs) {
+    if (!d || !d.url || !isFinanceDocUrl(d.url)) continue;
+    try {
+      const parts = financeRelParts(d.url);
+      let a = parts && analysePathParts(parts, rec, opts);
+      if (!a) continue;                                   // already in the right folder
+      let item;
+      const loc = await findExistingFile(a, rec);         // saved link may be stale, so check the likely places...
+      if (loc) { item = loc.item; a = analysePathParts(loc.all, rec, opts); }
+      else { const f = await locateByName(d.name, rec); item = f.item; a = analysePathParts(f.parts, rec, opts); }   // ...then search by name
+      if (!a) continue;
+      const body = {};
+      if (a.needMove) body.parentReference = { id: await ensureFolderId([DOC_LIBRARY_ROOT, a.entity, a.period, a.parts[1], a.company].join('/')) };
+      if (a.needRename) body.name = prefixedName(a.prefix, item.name);
+      const res = await graphFetch("/drives/" + docLibraryDriveId + "/items/" + item.id, { method: 'PATCH', body: JSON.stringify(body) });
+      d.url = res.webUrl || item.webUrl;
+      if (a.needRename) d.name = res.name || item.name;
+      moved++;
+    } catch (e) { failed++; if (!firstError) firstError = e.message; }
+  }
+  if (moved) {
+    const json = JSON.stringify(docs);
+    await updateRequestItem(record.id, { documentLinks: json });
+    const cached = findRecord(record.id); if (cached) cached.documentLinks = json;
+    if (modalContext && modalContext.record && modalContext.record.id === record.id) modalContext.record.documentLinks = json;
+  }
+  return { moved, failed, firstError };
 }
 
 /* Totals per currency for a list of requests: one tile per currency (SGD, MYR first, then any others),
@@ -3984,6 +4044,7 @@ async function handleApprovalDecision(decision){
   try {
     let patch;
     let toastMsg = 'Decision recorded.';
+    let fileWarn = false;
     if (decision === 'reject' && record.isUrgent) {
       // The Urgent Payment Approver rejected it — don't terminate the request. Fall back to
       // the normal flow: route it to the department approver for standard review, same as
@@ -4009,12 +4070,17 @@ async function handleApprovalDecision(decision){
     }
     await updateRequestItem(record.id, patch);
     if (decision === 'approve') {
+      // File the attachments under the approval date's period folder. Never blocks the approval itself.
+      try {
+        const mv = await moveFilesToApprovalFolder(record, patch.approvalDate);
+        if (mv.failed) { fileWarn = true; toastMsg = 'Approved, but ' + mv.failed + ' attachment(s) could not be moved to the approval-date folder (' + mv.firstError + '). An admin can fix this with Admin \u2192 Move Old Files.'; }
+      } catch (e) { fileWarn = true; toastMsg = 'Approved, but the attachments could not be moved to the approval-date folder (' + e.message + '). An admin can fix this with Admin \u2192 Move Old Files.'; }
       await notifyFinanceOfApproval(Object.assign({}, record, patch));
     } else if (decision === 'reject' && record.isUrgent && patch.approverEmail) {
       // Fell back to the department approver — that's effectively a new request in their queue.
       await notifyApproverOfNewRequest(Object.assign({}, record, patch));
     }
-    showToast(toastMsg, decision === 'reject' && record.isUrgent && !((deptApproverMap[record.department] || {}).email) ? 'error' : 'success');
+    showToast(toastMsg, fileWarn || (decision === 'reject' && record.isUrgent && !((deptApproverMap[record.department] || {}).email)) ? 'error' : 'success');
     closeModal();
     await refreshAll();
   } catch (e) { showToast('Could not record decision: ' + e.message, 'error'); }
