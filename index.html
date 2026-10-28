@@ -209,13 +209,13 @@
   }
   .file-chip .rm { cursor: pointer; color: var(--bad); font-weight: 700; padding: 0 4px; }
   /* ---- Supporting document groups (PO / POD / Invoice / Other) ---- */
-  .doc-groups { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-  @media (max-width: 720px) { .doc-groups { grid-template-columns: 1fr; } }
-  .doc-group { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
-  .doc-group-title { font-weight: 700; font-size: 12.5px; display: flex; align-items: center; gap: 8px; cursor: pointer; margin: 0; }
-  .doc-group-title input { width: 16px; height: 16px; margin: 0; cursor: pointer; }
-  .doc-group-hint { font-size: 11.5px; color: var(--sub); margin: 2px 0 0 24px; }
-  .doc-group-body { margin-top: 8px; }
+  .doc-groups { display: flex; flex-direction: column; gap: 10px; }
+  .doc-group { display: flex; align-items: flex-start; gap: 16px; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+  .doc-group-label { flex: 0 0 150px; padding-top: 6px; }
+  .doc-group-title { font-weight: 700; font-size: 13px; }
+  .doc-group-hint { font-size: 11.5px; color: var(--sub); margin-top: 2px; }
+  .doc-group-body { flex: 1; min-width: 0; }
+  @media (max-width: 720px) { .doc-group { flex-direction: column; gap: 6px; } .doc-group-label { flex: none; padding-top: 0; } }
   .doc-group input[type=file] { padding: 8px; }
 
   /* ---- Purchase Order autofill (Operations) ---- */
@@ -568,7 +568,7 @@
       <div class="field-row" style="margin-top:10px;">
         <label class="field-label">Supporting Documents <span class="req">*</span></label>
         <div class="doc-groups" id="new-doc-groups"></div>
-        <div class="field-hint">Tick the group(s) you need to attach files for. PO, POD and Invoice files are saved as <code>PO_&hellip;</code>, <code>POD_&hellip;</code> or <code>Invoice_&hellip;</code> unless the file name already says so; Others keep their file name. Files upload to the department's SharePoint folder when you save or submit.</div>
+        <div class="field-hint">Upload each file under its group; you only need the groups that apply. PO, POD and Invoice files are saved as <code>PO_&hellip;</code>, <code>POD_&hellip;</code> or <code>Invoice_&hellip;</code> unless the file name already says so; Others keep their file name. Files upload to the department's SharePoint folder when you save or submit.</div>
       </div>
 
       <div class="btn-row">
@@ -1698,31 +1698,12 @@ function groupedFileName(file){
 }
 function docGroupZonesHtml(idPrefix, changeFn){
   return DOC_GROUPS.map(g =>
-    '<div class="doc-group"><label class="doc-group-title"><input type="checkbox" id="' + idPrefix + '-chk-' + g.key + '" onchange="toggleDocGroup(\'' + idPrefix + '\',\'' + g.key + '\')"> ' + g.label + '</label>' +
-    '<div class="doc-group-hint">' + g.hint + '</div>' +
-    '<div class="doc-group-body" id="' + idPrefix + '-body-' + g.key + '" style="display:none;">' +
+    '<div class="doc-group"><div class="doc-group-label"><div class="doc-group-title">' + g.label + '</div>' +
+    '<div class="doc-group-hint">' + g.hint + '</div></div>' +
+    '<div class="doc-group-body">' +
     '<input type="file" id="' + idPrefix + '-files-' + g.key + '" multiple onchange="' + changeFn + '(event,\'' + g.key + '\')">' +
     '<div class="file-chip-list" id="' + idPrefix + '-chips-' + g.key + '"></div></div></div>'
   ).join('');
-}
-function setDocGroupOpen(idPrefix, key, open){
-  const chk = document.getElementById(idPrefix + '-chk-' + key), body = document.getElementById(idPrefix + '-body-' + key);
-  if (chk) chk.checked = open;
-  if (body) body.style.display = open ? '' : 'none';
-}
-/* Groups that hold files always stay open; groups the user ticked stay open even while empty. */
-function syncDocGroups(idPrefix, files){
-  DOC_GROUPS.forEach(g => { if (files.some(f => docGroupFor(f).key === g.key)) setDocGroupOpen(idPrefix, g.key, true); });
-}
-function toggleDocGroup(idPrefix, key){
-  const chk = document.getElementById(idPrefix + '-chk-' + key);
-  if (chk.checked) { setDocGroupOpen(idPrefix, key, true); return; }
-  const files = idPrefix === 'f' ? newRequestFiles : (modalContext.editFiles || []);
-  const idx = []; files.forEach((f, i) => { if (docGroupFor(f).key === key) idx.push(i); });
-  if (idx.length && !confirm('Remove the ' + idx.length + ' file(s) attached under ' + key + '?')) { chk.checked = true; return; }
-  if (idPrefix === 'f') { for (let k = idx.length - 1; k >= 0; k--) removeNewFile(idx[k]); }
-  else { for (let k = idx.length - 1; k >= 0; k--) modalContext.editFiles.splice(idx[k], 1); renderEditNewFileChips(); }
-  setDocGroupOpen(idPrefix, key, false);
 }
 function docGroupChipsHtml(files, key, removeFn){
   return files.map((f, i) => ({ f, i })).filter(x => docGroupFor(x.f).key === key).map(x =>
@@ -2279,7 +2260,6 @@ function renderNewFileChips(){
     const el = document.getElementById('f-chips-' + g.key);
     if (el) el.innerHTML = docGroupChipsHtml(newRequestFiles, g.key, 'removeNewFile');
   });
-  syncDocGroups('f', newRequestFiles);
 }
 function removeNewFile(i){
   const f = newRequestFiles[i];
@@ -2301,7 +2281,6 @@ function clearNewRequestForm(){
   document.getElementById('f-urgent').checked = false;
   document.getElementById('urgent-justification-row').style.display = 'none';
   newRequestFiles.length = 0;
-  DOC_GROUPS.forEach(g => setDocGroupOpen('f', g.key, false));
   poEntries.length = 0; renderPoChips(); setPoMsg(''); clearAutofillMarks();
   updatePoBoxVisibility();
   pendingNewRequestId = null;
@@ -3660,7 +3639,6 @@ function renderEditNewFileChips(){
     const el = document.getElementById('ed-chips-' + g.key);
     if (el) el.innerHTML = docGroupChipsHtml(modalContext.editFiles || [], g.key, 'removeEditNewFile');
   });
-  syncDocGroups('ed', modalContext.editFiles || []);
 }
 async function handleEditFileSelect(e, group){
   const picked = await snapshotFiles(e.target.files, group);
