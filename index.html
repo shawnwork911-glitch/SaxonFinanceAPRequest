@@ -208,6 +208,13 @@
     border-radius: 5px; padding: 6px 10px; font-size: 12.5px;
   }
   .file-chip .rm { cursor: pointer; color: var(--bad); font-weight: 700; padding: 0 4px; }
+  /* ---- Supporting document groups (PO / POD / Invoice / Other) ---- */
+  .doc-groups { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 720px) { .doc-groups { grid-template-columns: 1fr; } }
+  .doc-group { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+  .doc-group-title { font-weight: 700; font-size: 12.5px; margin-bottom: 2px; }
+  .doc-group-hint { font-size: 11.5px; color: var(--sub); margin-bottom: 6px; }
+  .doc-group input[type=file] { padding: 8px; }
 
   /* ---- Purchase Order autofill (Operations) ---- */
   #po-box { border: 1px dashed var(--accent); background: var(--accent-light); border-radius: 8px; padding: 14px 16px; margin-bottom: 18px; }
@@ -558,9 +565,8 @@
 
       <div class="field-row" style="margin-top:10px;">
         <label class="field-label">Supporting Documents <span class="req">*</span></label>
-        <input type="file" id="f-files" multiple>
-        <div class="field-hint">Invoice, PO, receipts, etc. Files upload to the department's SharePoint folder when you save or submit.</div>
-        <div class="file-chip-list" id="new-file-chip-list"></div>
+        <div class="doc-groups" id="new-doc-groups"></div>
+        <div class="field-hint">Choose the group each file belongs to. PO, POD and Invoice files are saved as <code>PO_&hellip;</code>, <code>POD_&hellip;</code> or <code>Invoice_&hellip;</code> unless the file name already says so; Others keep their file name. Files upload to the department's SharePoint folder when you save or submit.</div>
       </div>
 
       <div class="btn-row">
@@ -1669,16 +1675,47 @@ function prefixedName(prefix, name){
   const b = base.length > room ? base.slice(0, room - 20) + base.slice(-20) : base;   // always keep the timestamp tail
   return prefix + b + ext;
 }
-async function uploadOneFile(driveId, folderPath, file, dupIndex, namePrefix){
+/* ---- Supporting-document groups ----
+   Each file is attached to one group. PO / POD / Invoice files are saved under their own file name,
+   with the group name put in front (PO_, POD_, Invoice_) when the name doesn't already contain it.
+   "Other" files keep their file name exactly. */
+const DOC_GROUPS = [
+  { key: 'PO',      label: 'PO',      prefix: 'PO_',      hint: 'Purchase orders',                  test: /PO/ },
+  { key: 'POD',     label: 'POD',     prefix: 'POD_',     hint: 'Proof of delivery',                test: /POD/ },
+  { key: 'Invoice', label: 'Invoice', prefix: 'Invoice_', hint: 'Vendor invoices / bills',          test: /invoice|(^|[^a-z])inv([^a-z]|$)/i },
+  { key: 'Other',   label: 'Other',   prefix: '',         hint: 'Receipts, quotations, anything else', test: null }
+];
+function docGroupFor(file){ return DOC_GROUPS.find(g => g.key === file.docGroup) || DOC_GROUPS[DOC_GROUPS.length - 1]; }
+function groupedFileName(file){
   const safeName = file.name.replace(/[#%*:<>?/\\{|}]/g, '_');
-  // Keep the file's actual name, but stamp a timestamp behind it (before the extension) so
-  // re-uploading a file with the same name never silently overwrites an earlier one.
+  const g = docGroupFor(file);
+  if (!g.prefix) return safeName;                              // Other: use the file name directly
+  const base = safeName.lastIndexOf('.') > 0 ? safeName.slice(0, safeName.lastIndexOf('.')) : safeName;
+  const hasKeyword = g.test.test(base) || (g.key === 'PO' && /(^|[^a-z])po([^a-z]|$)/i.test(base));
+  return hasKeyword ? safeName : g.prefix + safeName;
+}
+function docGroupZonesHtml(idPrefix, changeFn){
+  return DOC_GROUPS.map(g =>
+    '<div class="doc-group"><div class="doc-group-title">' + g.label + '</div>' +
+    '<div class="doc-group-hint">' + g.hint + '</div>' +
+    '<input type="file" id="' + idPrefix + '-files-' + g.key + '" multiple onchange="' + changeFn + '(event,\'' + g.key + '\')">' +
+    '<div class="file-chip-list" id="' + idPrefix + '-chips-' + g.key + '"></div></div>'
+  ).join('');
+}
+function docGroupChipsHtml(files, key, removeFn){
+  return files.map((f, i) => ({ f, i })).filter(x => docGroupFor(x.f).key === key).map(x =>
+    '<div class="file-chip"><span>' + escapeHtml(groupedFileName(x.f)) + '</span><span class="rm" onclick="' + removeFn + '(' + x.i + ')">Remove</span></div>'
+  ).join('');
+}
+async function uploadOneFile(driveId, folderPath, file, dupIndex, namePrefix){
+  // The file keeps its own name (with PO_/POD_/Invoice_ in front where needed - see groupedFileName).
+  // dupIndex numbers two attachments with the same name (e.g. two "invoice.pdf") so they can't clash;
+  // conflictBehavior=rename below makes SharePoint number the file instead of overwriting an existing one.
+  const safeName = groupedFileName(file);
   const dot = safeName.lastIndexOf('.');
   const base = dot > 0 ? safeName.slice(0, dot) : safeName;
   const ext = dot > 0 ? safeName.slice(dot) : '';
-  // dupIndex keeps two attachments with the same name (e.g. two "invoice.pdf") from
-  // overwriting each other when they're uploaded within the same second.
-  const plainName = base + '_' + fileTimestampSuffix() + (dupIndex ? '_' + (dupIndex + 1) : '') + ext;
+  const plainName = base + (dupIndex ? '_' + (dupIndex + 1) : '') + ext;
   const stampedName = namePrefix ? prefixedName(namePrefix, plainName) : plainName;
   const encodedPath = encodeURIComponent(folderPath + '/' + stampedName).replace(/%2F/g, '/');
   let buf;
@@ -1687,7 +1724,7 @@ async function uploadOneFile(driveId, folderPath, file, dupIndex, namePrefix){
     throw new Error('The attachment "' + file.name + '" could not be read — it may have been moved, renamed or deleted after you attached it. Remove it, then attach it again.');
   }
   const item = await graphFetch(
-    "/drives/" + driveId + "/root:/" + encodedPath + ":/content?@microsoft.graph.conflictBehavior=replace",
+    "/drives/" + driveId + "/root:/" + encodedPath + ":/content?@microsoft.graph.conflictBehavior=rename",
     { method: 'PUT', body: buf, headers: { 'Content-Type': file.type || 'application/octet-stream' } }
   );
   return { name: item.name || stampedName, url: viewableUrl(item.webUrl, folderPath + '/' + (item.name || stampedName)) };
@@ -1767,9 +1804,7 @@ async function uploadFilesForRequest(department, vendorName, currency, requestId
     for (const di of neededDests) await ensureFolderPath(dests[di].driveId, dests[di].folderPath);
     // Number repeated names so they get distinct file names in the folder
     const seen = {};
-    const dupIndex = files.map(f => { const k = f.name.toLowerCase(); seen[k] = (seen[k] || 0) + 1; return seen[k] - 1; });
-    // Same fixed timestamp for every upload in this batch, so both copies of a file share one name.
-    fileTimestampSuffix.fixedDate = new Date();
+    const dupIndex = files.map(f => { const k = groupedFileName(f).toLowerCase(); seen[k] = (seen[k] || 0) + 1; return seen[k] - 1; });
     const failures = [];
     let next = 0;
     const worker = async () => {
@@ -1789,11 +1824,7 @@ async function uploadFilesForRequest(department, vendorName, currency, requestId
         if (onProgress) onProgress(done, total);
       }
     };
-    try {
-      await Promise.all(Array.from({ length: Math.min(UPLOAD_CONCURRENCY, tasks.length) }, worker));
-    } finally {
-      fileTimestampSuffix.fixedDate = null;
-    }
+    await Promise.all(Array.from({ length: Math.min(UPLOAD_CONCURRENCY, tasks.length) }, worker));
     if (failures.length) {
       const okCount = total - failures.length;
       throw new Error(failures.length + ' of ' + total + ' upload(s) failed (' +
@@ -1982,14 +2013,16 @@ function setBusy(btn, busy, busyLabel){
    temporary copy (e.g. opened straight from an Outlook/WhatsApp attachment or a zip), reading
    it later at save time fails with "A requested file or directory could not be found…".
    Snapshotting it here means the upload no longer depends on the original still existing. */
-async function snapshotFiles(fileList){
+async function snapshotFiles(fileList, group){
   const out = [], failed = [];
   const tooBig = [];
   for (const f of Array.from(fileList)) {
     if (f.size > MAX_FILE_BYTES) { tooBig.push(f.name); continue; }
     try {
       const buf = await f.arrayBuffer();
-      out.push(new File([buf], f.name, { type: f.type, lastModified: f.lastModified }));
+      const copy = new File([buf], f.name, { type: f.type, lastModified: f.lastModified });
+      copy.docGroup = group || 'Other';
+      out.push(copy);
     } catch (err) {
       failed.push(f.name);
     }
@@ -2007,12 +2040,13 @@ refreshDueDate('f');
   const el = document.getElementById(id);
   ['input','change'].forEach(ev => el.addEventListener(ev, () => el.classList.remove('autofilled')));
 });
-document.getElementById('f-files').addEventListener('change', async (e) => {
-  const picked = await snapshotFiles(e.target.files);
+document.getElementById('new-doc-groups').innerHTML = docGroupZonesHtml('f', 'handleNewFileSelect');
+async function handleNewFileSelect(e, group){
+  const picked = await snapshotFiles(e.target.files, group);
   e.target.value = '';
   for (const f of picked) newRequestFiles.push(f);
   renderNewFileChips();
-});
+}
 
 /* ---------------------------------------------------------------------
    Purchase Order autofill (Operations department)
@@ -2169,7 +2203,7 @@ function poConflict(po){
 document.getElementById('f-po-files').addEventListener('change', async (e) => {
   const picked = Array.from(e.target.files);
   if (!picked.length) return;
-  const snaps = await snapshotFiles(picked);
+  const snaps = await snapshotFiles(picked, 'PO');
   e.target.value = '';
   setPoMsg('Reading ' + snaps.length + ' PO file(s)…');
   const problems = [];
@@ -2219,10 +2253,10 @@ function updatePoBoxVisibility(){
 }
 
 function renderNewFileChips(){
-  const list = document.getElementById('new-file-chip-list');
-  list.innerHTML = newRequestFiles.map((f, i) =>
-    '<div class="file-chip"><span>' + escapeHtml(f.name) + '</span><span class="rm" onclick="removeNewFile(' + i + ')">Remove</span></div>'
-  ).join('');
+  DOC_GROUPS.forEach(g => {
+    const el = document.getElementById('f-chips-' + g.key);
+    if (el) el.innerHTML = docGroupChipsHtml(newRequestFiles, g.key, 'removeNewFile');
+  });
 }
 function removeNewFile(i){
   const f = newRequestFiles[i];
@@ -3597,18 +3631,14 @@ function removeEditDoc(i){
   modalContext.editDocs.splice(i, 1);
   renderEditDocChips();
 }
-function renderEditNewFileChipsInner(){
-  const files = modalContext.editFiles || [];
-  return files.map((f, i) =>
-    '<div class="file-chip"><span>' + escapeHtml(f.name) + '</span><span class="rm" onclick="removeEditNewFile(' + i + ')">Remove</span></div>'
-  ).join('');
-}
 function renderEditNewFileChips(){
-  const el = document.getElementById('edit-new-file-chip-list');
-  if (el) el.innerHTML = renderEditNewFileChipsInner();
+  DOC_GROUPS.forEach(g => {
+    const el = document.getElementById('ed-chips-' + g.key);
+    if (el) el.innerHTML = docGroupChipsHtml(modalContext.editFiles || [], g.key, 'removeEditNewFile');
+  });
 }
-async function handleEditFileSelect(e){
-  const picked = await snapshotFiles(e.target.files);
+async function handleEditFileSelect(e, group){
+  const picked = await snapshotFiles(e.target.files, group);
   e.target.value = '';
   for (const f of picked) modalContext.editFiles.push(f);
   renderEditNewFileChips();
@@ -3662,9 +3692,8 @@ function renderEditDraftForm(record, introHtml){
     '<div class="field-row" style="margin-top:10px;">' +
       '<label class="field-label">Supporting Documents <span class="req">*</span></label>' +
       '<div id="edit-existing-doc-list" class="doc-link-list" style="margin-bottom:8px;">' + renderEditDocListInner() + '</div>' +
-      '<input type="file" id="ed-files" multiple onchange="handleEditFileSelect(event)">' +
-      '<div class="field-hint">Newly attached files upload to the department\'s SharePoint folder when you save or submit.</div>' +
-      '<div class="file-chip-list" id="edit-new-file-chip-list">' + renderEditNewFileChipsInner() + '</div>' +
+      '<div class="doc-groups">' + docGroupZonesHtml('ed', 'handleEditFileSelect') + '</div>' +
+      '<div class="field-hint">Newly attached files upload to the department\'s SharePoint folder when you save or submit. PO, POD and Invoice files get <code>PO_</code>, <code>POD_</code> or <code>Invoice_</code> in front unless the name already says so.</div>' +
     '</div>';
 }
 function readEditDraftForm(){
