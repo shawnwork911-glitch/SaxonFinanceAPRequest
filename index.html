@@ -508,6 +508,7 @@
             <option value="Strategic Partnerships &amp; Events">Strategic Partnerships &amp; Events</option>
             <option value="Operations">Operations</option>
             <option value="HR Admin">HR Admin</option>
+            <option value="Carbon Credit">Carbon Credit</option>
           </select>
         </div>
         <div class="field-row">
@@ -620,6 +621,7 @@
             <option value="Strategic Partnerships &amp; Events">Strategic Partnerships &amp; Events</option>
             <option value="Operations">Operations</option>
             <option value="HR Admin">HR Admin</option>
+            <option value="Carbon Credit">Carbon Credit</option>
           </select>
           <button type="button" class="btn btn-ghost" onclick="refreshAll()">Refresh</button>
         </div>
@@ -652,6 +654,7 @@
             <option value="Strategic Partnerships &amp; Events">Strategic Partnerships &amp; Events</option>
             <option value="Operations">Operations</option>
             <option value="HR Admin">HR Admin</option>
+            <option value="Carbon Credit">Carbon Credit</option>
           </select>
           <button type="button" class="btn btn-ghost" onclick="refreshAll()">Refresh</button>
         </div>
@@ -685,6 +688,7 @@
           <option value="Strategic Partnerships &amp; Events">Strategic Partnerships &amp; Events</option>
           <option value="Operations">Operations</option>
           <option value="HR Admin">HR Admin</option>
+          <option value="Carbon Credit">Carbon Credit</option>
         </select>
       </div>
     </div>
@@ -770,7 +774,7 @@
   <div class="view" id="view-admin">
     <div class="card" id="admin-list-warning" style="display:none; border-left: 3px solid var(--warn); background: var(--warn-bg);">
       <strong>The "AP System Roles" list wasn't found on this site.</strong>
-      <div class="field-hint" style="margin-top:6px;">Create a SharePoint list named exactly <code>AP System Roles</code> on the same site as your requests list, with columns: <code>RoleType</code> (Choice: "Department Approver", "Finance Team", "Urgent Payment Approver", "Requester Department"), <code>Department</code> (Choice: Digital Growth &amp; Branding/Strategic Partnerships &amp; Events/Operations/HR Admin — leave blank for Finance Team rows; it is ignored on the Urgent Payment Approver row, which always covers every department), <code>Email</code> (Single line of text). Then click Recheck below.</div>
+      <div class="field-hint" style="margin-top:6px;">Create a SharePoint list named exactly <code>AP System Roles</code> on the same site as your requests list, with columns: <code>RoleType</code> (Choice: "Department Approver", "Finance Team", "Urgent Payment Approver", "Requester Department"), <code>Department</code> (Choice: Digital Growth &amp; Branding/Strategic Partnerships &amp; Events/Operations/HR Admin/Carbon Credit — leave blank for Finance Team rows; it is ignored on the Urgent Payment Approver row, which always covers every department), <code>Email</code> (Single line of text). Then click Recheck below.</div>
       <div class="btn-row" style="justify-content:flex-start; margin-top:10px;">
         <button type="button" class="btn btn-ghost" onclick="recheckRolesList()">Recheck</button>
       </div>
@@ -1152,7 +1156,8 @@ const DEPARTMENTS = {
   "Digital Growth & Branding":       { approverEmail: "marketing.approver@saxonrenewables.com" },
   "Strategic Partnerships & Events": { approverEmail: "marketing.approver@saxonrenewables.com" },
   "Operations": { approverEmail: "operations.approver@saxonrenewables.com" },
-  "HR Admin":   { approverEmail: "hr.approver@saxonrenewables.com" }
+  "HR Admin":   { approverEmail: "hr.approver@saxonrenewables.com" },
+  "Carbon Credit": { approverEmail: "" } // set the real approver in the User Management tab
 };
 /* Shared Urgent Payment Approver fallback — used only when the "AP System Roles" list can't be
    read for the signed-in user (e.g. no permission on the list) or has no Urgent Payment
