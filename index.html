@@ -602,7 +602,7 @@
         </div>
       </div>
       <table class="data-table">
-        <thead><tr><th>Document Number</th><th>Department</th><th>Vendor</th><th>Amount</th><th>Status</th><th>Verification</th><th>Due Date</th></tr></thead>
+        <thead><tr><th>Document Number</th><th>Department</th><th>Vendor</th><th>Amount</th><th>Outcome</th><th>Decided</th><th>Payment ref.</th></tr></thead>
         <tbody id="mine-table-body"></tbody>
       </table>
     </div>
@@ -2445,7 +2445,7 @@ function renderMineTable(){
   body.innerHTML = rows.length ? rows.map(r =>
     '<tr' + urgentRowAttr(r) + ' onclick="openDetail(\'' + r.id + '\',\'mine\')"><td>' + escapeHtml(r.invoiceNumber || '—') + urgentTag(r) + '</td><td>' + escapeHtml(r.department) +
     '</td><td>' + escapeHtml(r.vendorName) + '</td><td>' + fmtAmount(r.amount, r.currency) +
-    '</td><td>' + statusPill(r.status) + '</td><td>' + verifyCell(r) + '</td><td>' + fmtDate(r.dueDate) + '</td></tr>'
+    '</td><td>' + statusPill(r.status) + '</td><td>' + (r.financeDecisionDate ? fmtDateTime(r.financeDecisionDate) : '') + '</td><td>' + escapeHtml(r.paymentReference || '') + '</td></tr>'
   ).join('') : '<tr class="empty-row"><td colspan="7">No requests yet.</td></tr>';
 
   const drafts = mine.filter(r => r.status === STATUS.DRAFT);
