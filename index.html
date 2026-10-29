@@ -623,6 +623,9 @@
             <option value="HR Admin">HR Admin</option>
             <option value="Carbon Credit">Carbon Credit</option>
           </select>
+          <select class="filter-select" id="approvals-verify-filter" onchange="renderApprovalsTable()">
+            <option value="">All verification statuses</option>
+          </select>
           <button type="button" class="btn btn-ghost" onclick="refreshAll()">Refresh</button>
         </div>
       </div>
@@ -655,6 +658,9 @@
             <option value="Operations">Operations</option>
             <option value="HR Admin">HR Admin</option>
             <option value="Carbon Credit">Carbon Credit</option>
+          </select>
+          <select class="filter-select" id="finance-verify-filter" onchange="renderFinanceTable()">
+            <option value="">All verification statuses</option>
           </select>
           <button type="button" class="btn btn-ghost" onclick="refreshAll()">Refresh</button>
         </div>
@@ -2808,6 +2814,29 @@ function renderCurrencyTotals(elId, rows){
   }).join('');
 }
 /* ---- Approvals ---- */
+/* Verification-status filter for the Approvals / Finance queues. Options are the usual statuses plus any other value found in the data. */
+const VERIFY_NONE = '__none__';
+function verifyFilterMatch(r, val){
+  if (!val) return true;
+  const v = verifyStatusOf(r);
+  if (val === VERIFY_NONE) return !v;
+  return v.toLowerCase() === val.toLowerCase();
+}
+function syncVerifyFilter(selId){
+  const sel = document.getElementById(selId);
+  if (!sel) return;
+  const cur = sel.value;
+  const seen = {};
+  const vals = ['Checked', 'Discrepancy Found', 'Incomplete', 'Not Needed'];
+  vals.forEach(v => { seen[v.toLowerCase()] = true; });
+  allItemsCache.forEach(r => {
+    const v = verifyStatusOf(r);
+    if (v && !seen[v.toLowerCase()]) { seen[v.toLowerCase()] = true; vals.push(v); }
+  });
+  sel.innerHTML = '<option value="">All verification statuses</option><option value="' + VERIFY_NONE + '">Not checked yet</option>' +
+    vals.map(v => '<option value="' + escapeHtml(v) + '">' + escapeHtml(v) + '</option>').join('');
+  sel.value = Array.from(sel.options).some(o => o.value === cur) ? cur : '';
+}
 function renderApprovalsTable(){
   const depts = approverDepartments();
   const email = myEmail();
@@ -2816,9 +2845,11 @@ function renderApprovalsTable(){
   const pendingAll = allItemsCache.filter(r => r.status === STATUS.PENDING_APPROVAL &&
       (r.isUrgent ? (r.approverEmail || '').toLowerCase() === email : depts.includes(r.department)));
   const apprKw = kwValue('approvals-search');
-  const pending = pendingAll.filter(r => (!deptFilter || r.department === deptFilter) && matchesKeyword(r, apprKw))
+  syncVerifyFilter('approvals-verify-filter');
+  const verFilter = document.getElementById('approvals-verify-filter').value;
+  const pending = pendingAll.filter(r => (!deptFilter || r.department === deptFilter) && verifyFilterMatch(r, verFilter) && matchesKeyword(r, apprKw))
     .sort((a, b) => (a.submittedDate || '').localeCompare(b.submittedDate || ''));
-  const decided = allItemsCache.filter(r => (r.approverEmail || '').toLowerCase() === email && r.approvalDate && (!deptFilter || r.department === deptFilter) && matchesKeyword(r, apprKw))
+  const decided = allItemsCache.filter(r => (r.approverEmail || '').toLowerCase() === email && r.approvalDate && (!deptFilter || r.department === deptFilter) && verifyFilterMatch(r, verFilter) && matchesKeyword(r, apprKw))
     .sort((a, b) => (b.approvalDate || '').localeCompare(a.approvalDate || ''));
   renderCurrencyTotals('approvals-totals', pending);
   document.getElementById('count-approvals').textContent = pendingAll.length;
@@ -2839,9 +2870,11 @@ function renderApprovalsTable(){
 function renderFinanceTable(){
   const deptFilter = document.getElementById('finance-dept-filter').value;
   const finKw = kwValue('finance-search');
-  const pending = allItemsCache.filter(r => r.status === STATUS.PENDING_FINANCE && (!deptFilter || r.department === deptFilter) && matchesKeyword(r, finKw))
+  syncVerifyFilter('finance-verify-filter');
+  const verFilter = document.getElementById('finance-verify-filter').value;
+  const pending = allItemsCache.filter(r => r.status === STATUS.PENDING_FINANCE && (!deptFilter || r.department === deptFilter) && verifyFilterMatch(r, verFilter) && matchesKeyword(r, finKw))
     .sort((a, b) => (Number(!!b.isUrgent) - Number(!!a.isUrgent)) || (a.approvalDate || '').localeCompare(b.approvalDate || ''));
-  const history = allItemsCache.filter(r => (r.status === STATUS.PROCESSED || r.status === STATUS.REJECTED_FINANCE) && (!deptFilter || r.department === deptFilter) && matchesKeyword(r, finKw))
+  const history = allItemsCache.filter(r => (r.status === STATUS.PROCESSED || r.status === STATUS.REJECTED_FINANCE) && (!deptFilter || r.department === deptFilter) && verifyFilterMatch(r, verFilter) && matchesKeyword(r, finKw))
     .sort((a, b) => (b.financeDecisionDate || '').localeCompare(a.financeDecisionDate || ''));
   renderCurrencyTotals('finance-totals', pending);
   // The tab badge ignores the keyword search (same as the Approvals badge), so typing doesn't change it.
