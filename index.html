@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Saxon AP Request System</title>
 <link rel="shortcut icon" type="image/x-icon" href="assets/favicon.ico">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://unpkg.com/@azure/msal-browser@3/lib/msal-browser.min.js"></script>
 <style>
   :root {
@@ -441,6 +443,93 @@
   @media (max-width: 720px) { .gantt-head, .gantt-row { grid-template-columns: 160px 1fr; } }
 
   @media print { #top-bar, #tabs, .toolbar-row, .btn-row, #modal-overlay, #chart-tooltip, #theme-toggle-btn { display: none !important; } }
+
+  /* ===== Certificate Desk design layer (visual only; no logic) ===== */
+  :root{
+    --ink:#18262b; --sub:#5d6f76; --line:#dbe3e6; --paper:#f3f6f7; --panel:#ffffff;
+    --accent:#2f9d8f; --accent-light:#e3f3f0;
+    --good:#2e8b57; --good-bg:#e4f4ea; --warn:#c77d16; --warn-bg:#fcf0dc;
+    --bad:#c8402f; --bad-bg:#fbe9e6; --info:#7a5bc7; --info-bg:#efeafa;
+    --surface-2:#f6f9fa; --glow:rgba(47,157,143,.10);
+    --topbar-h:58px; --side-w:224px;
+  }
+  :root[data-theme="dark"]{
+    --ink:#e6efef; --sub:#93a9ae; --line:#27393f; --paper:#0f1719; --panel:#162226;
+    --accent:#4fb3a5; --accent-light:#17302f;
+    --good:#5fc58a; --good-bg:#14301f; --warn:#e8a54a; --warn-bg:#352611;
+    --bad:#ef6b5a; --bad-bg:#3a1a16; --info:#a58cf0; --info-bg:#251d3b;
+    --surface-2:#1b2b30; --glow:rgba(79,179,165,.14);
+  }
+  body{font-family:'Montserrat',"Segoe UI","Helvetica Neue",Arial,sans-serif;}
+  .card{border-radius:10px;box-shadow:0 1px 2px rgba(0,0,0,.04);}
+  :root[data-theme="dark"] .card{box-shadow:0 0 18px var(--glow);}
+  input.text-field:focus,select.text-field:focus,textarea.text-field:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--glow);}
+  .btn-primary:hover:not(:disabled){opacity:1;filter:brightness(1.08);}
+
+  /* ---- top bar (fixed) ---- */
+  #top-bar{
+    position:fixed;top:0;left:0;right:0;height:var(--topbar-h);z-index:240;
+    padding:0 16px;background:var(--panel);border-bottom:1px solid var(--line);
+  }
+  #top-bar .brand-text{font-size:14px;}
+  #top-bar .brand-text small{font-size:11px;}
+  #user-box{gap:10px;}
+  #user-box .who{font-size:12px;}
+  .role-badge{font-size:10px;background:var(--glow);}
+  #theme-toggle-btn,#signout-btn{font-size:12px;padding:6px 12px;border-radius:6px;background:var(--surface-2);border:1px solid var(--line);color:var(--ink);font-family:inherit;font-weight:600;}
+  #theme-toggle-btn:hover,#signout-btn:hover{border-color:var(--accent);background:var(--surface-2);}
+
+  /* ---- sidebar (the existing tab row) ---- */
+  #tabs{
+    position:fixed;top:var(--topbar-h);left:0;bottom:0;width:var(--side-w);z-index:230;
+    flex-direction:column;gap:2px;padding:14px 10px;
+    background:var(--panel);border-bottom:none;border-right:1px solid var(--line);overflow-y:auto;
+  }
+  #tabs .grp{font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--sub);padding:12px 10px 4px;}
+  #tabs .grp:first-child{padding-top:2px;}
+  #tabs .grp:not(:has(~ .tab-btn:not([style*="none"]))){display:none;}
+  #tabs .tab-btn{
+    display:flex;align-items:center;gap:10px;width:100%;text-align:left;font-family:inherit;
+    padding:9px 10px;margin:0;font-size:13px;font-weight:600;border:none;border-left:3px solid transparent;
+    border-radius:6px;color:var(--sub);background:transparent;
+  }
+  #tabs .tab-btn[style*="none"]{display:none;}
+  #tabs .tab-btn .ico{width:18px;text-align:center;flex:none;font-size:14px;}
+  #tabs .tab-btn:hover{background:var(--surface-2);color:var(--ink);}
+  #tabs .tab-btn.active{background:var(--glow);color:var(--ink);border-left-color:var(--accent);border-bottom-color:transparent;}
+  #tabs .tab-btn .count{margin-left:auto;font-family:'JetBrains Mono',ui-monospace,Consolas,monospace;border-radius:999px;padding:1px 7px;}
+
+  /* ---- page area ---- */
+  #top-bar[style*="flex"] ~ .wrap{margin:0 0 0 var(--side-w);max-width:none;padding:calc(var(--topbar-h) + 24px) 28px 90px;}
+  #top-bar[style*="flex"] ~ .wrap > *{max-width:1400px;}
+
+  /* ---- numbers, tiles, tables ---- */
+  .stat-tile{background:var(--panel);border-radius:10px;}
+  .stat-tile .stat-value,.currency-total .ct-amount{font-family:'JetBrains Mono',ui-monospace,Consolas,monospace;}
+  .currency-total{border-radius:10px;}
+  table.data-table thead th{background:var(--surface-2);border-bottom:1px solid var(--line);font-size:11px;letter-spacing:.05em;}
+  table.data-table tbody tr:hover{background:var(--glow);}
+  .timeline-row{background:var(--panel);}
+  .timeline-row:hover{background:var(--glow);border-color:var(--accent);}
+  .tl-count.active{border-color:var(--accent);}
+  .subtabs{background:var(--surface-2);border-radius:10px;}
+  .subtab-btn{font-size:12px;border-radius:7px;}
+  select.filter-select,input.kw-search{color:var(--ink);background:var(--panel);font-family:inherit;}
+
+  /* ---- responsive: icon rail ---- */
+  @media (max-width:900px){
+    :root{--side-w:52px;}
+    #tabs{padding:10px 6px;}
+    #tabs .grp{display:none !important;}
+    #tabs .tab-btn{font-size:0;justify-content:center;padding:10px 0;border-left-width:0;position:relative;}
+    #tabs .tab-btn .ico{font-size:17px;width:auto;}
+    #tabs .tab-btn .count{position:absolute;top:2px;right:2px;font-size:9px;padding:0 4px;min-width:14px;}
+    #tabs .tab-btn.active{box-shadow:inset 3px 0 0 var(--accent);}
+    #top-bar[style*="flex"] ~ .wrap{padding-left:16px;padding-right:16px;}
+    #top-bar .brand-text,#user-box .role-badges{display:none;}
+    .view{overflow-x:auto;}
+  }
+  @media print{ #top-bar[style*="flex"] ~ .wrap{margin:0;padding:0;} }
 </style>
 </head>
 <body>
@@ -471,12 +560,16 @@
 </div>
 
 <div id="tabs">
-  <button class="tab-btn active" data-view="new" onclick="switchTab('new')">New Request</button>
-  <button class="tab-btn" data-view="mine" onclick="switchTab('mine')">My Requests <span class="count zero" id="count-mine">0</span></button>
-  <button class="tab-btn" data-view="approvals" id="tab-approvals" style="display:none;" onclick="switchTab('approvals')">Approvals <span class="count zero" id="count-approvals">0</span></button>
-  <button class="tab-btn" data-view="finance" id="tab-finance" style="display:none;" onclick="switchTab('finance')">Finance Queue <span class="count zero" id="count-finance">0</span></button>
-  <button class="tab-btn" data-view="analytics" onclick="switchTab('analytics')">Analytics</button>
-  <button class="tab-btn" data-view="admin" id="tab-admin" style="display:none;" onclick="switchTab('admin')">User Management</button>
+  <div class="grp">Requests</div>
+  <button class="tab-btn active" data-view="new" onclick="switchTab('new')"><span class="ico">&#43;</span>New Request</button>
+  <button class="tab-btn" data-view="mine" onclick="switchTab('mine')"><span class="ico">&#9776;</span>My Requests <span class="count zero" id="count-mine">0</span></button>
+  <div class="grp">Review</div>
+  <button class="tab-btn" data-view="approvals" id="tab-approvals" style="display:none;" onclick="switchTab('approvals')"><span class="ico">&#10003;</span>Approvals <span class="count zero" id="count-approvals">0</span></button>
+  <button class="tab-btn" data-view="finance" id="tab-finance" style="display:none;" onclick="switchTab('finance')"><span class="ico">&#36;</span>Finance Queue <span class="count zero" id="count-finance">0</span></button>
+  <div class="grp">Insights</div>
+  <button class="tab-btn" data-view="analytics" onclick="switchTab('analytics')"><span class="ico">&#9636;</span>Analytics</button>
+  <div class="grp">Admin</div>
+  <button class="tab-btn" data-view="admin" id="tab-admin" style="display:none;" onclick="switchTab('admin')"><span class="ico">&#9786;</span>User Management</button>
 </div>
 
 <div class="wrap">
