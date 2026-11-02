@@ -341,6 +341,15 @@
   .stat-tile-urgent.has-urgent { background: var(--warn-bg); border-color: var(--warn); }
   .stat-tile-urgent.has-urgent .stat-value { color: var(--warn); }
   .stat-tile-urgent .field-hint { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* Clickable stat tiles / status bars → filtered request list */
+  .stat-tile.clickable { cursor: pointer; transition: border-color .15s, transform .15s; }
+  .stat-tile.clickable:hover { border-color: var(--accent); transform: translateY(-1px); }
+  .stat-tile.clickable:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .stat-tile.selected { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  .stat-tile-urgent.has-urgent.selected { border-color: var(--warn); box-shadow: inset 0 0 0 1px var(--warn); }
+  .hbar-row.clickable { cursor: pointer; border-radius: 6px; }
+  .hbar-row.clickable:hover .hbar-label, .hbar-row.selected .hbar-label { color: var(--ink); font-weight: 700; }
+  #analytics-list-card .table-scroll { overflow-x: auto; }
 
   .hbar-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
   .hbar-label { width: 200px; font-size: 12.5px; color: var(--sub); flex-shrink: 0; text-align: right; }
@@ -857,6 +866,24 @@ html.desk-nav-hidden #tabs{transform:translateX(-100%);visibility:hidden;}
         </div>
       </div>
       <div class="stat-grid" id="analytics-stats"></div>
+    </div>
+    <div class="card" id="analytics-list-card" style="display:none;">
+      <div class="toolbar-row">
+        <div>
+          <h2 style="margin:0;" id="analytics-list-title">Requests</h2>
+          <div class="muted small">Click a request to open it.</div>
+        </div>
+        <div class="filters">
+          <input type="search" class="kw-search" id="analytics-list-search" placeholder="Search vendor or document no." oninput="renderAnalyticsList()" autocomplete="off">
+          <button type="button" class="btn btn-ghost" onclick="setAnalyticsListFilter(null)">Close list</button>
+        </div>
+      </div>
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead><tr><th>Document Number</th><th>Department</th><th>Vendor</th><th>Amount</th><th>Status</th><th>Submitted</th><th>Payment ref.</th></tr></thead>
+          <tbody id="analytics-list-body"></tbody>
+        </table>
+      </div>
     </div>
     <div class="card">
       <div class="card-head"><h2>Status breakdown</h2></div>
@@ -3362,16 +3389,18 @@ function renderAnalyticsStats(){
   const rejectedTotal = (counts[STATUS.REJECTED_APPROVER] || 0) + (counts[STATUS.REJECTED_FINANCE] || 0);
   const urgentAwaitingFinance = scope.filter(r => r.isUrgent && r.status === STATUS.PENDING_FINANCE).length;
   const tiles = [
-    { label: 'Total requests', value: scope.length },
-    { label: 'Pending approval', value: counts[STATUS.PENDING_APPROVAL] || 0 },
-    { label: 'Pending finance', value: counts[STATUS.PENDING_FINANCE] || 0 },
-    { label: 'More info needed', value: counts[STATUS.PENDING_INFO] || 0 },
-    { label: 'Processed', value: counts[STATUS.PROCESSED] || 0 },
-    { label: 'Rejected', value: rejectedTotal },
-    { label: 'Urgent — awaiting Finance', value: urgentAwaitingFinance, urgent: true }
+    { key: 'total', label: 'Total requests', value: scope.length },
+    { key: 'pendingApproval', label: 'Pending approval', value: counts[STATUS.PENDING_APPROVAL] || 0 },
+    { key: 'pendingFinance', label: 'Pending finance', value: counts[STATUS.PENDING_FINANCE] || 0 },
+    { key: 'moreInfo', label: 'More info needed', value: counts[STATUS.PENDING_INFO] || 0 },
+    { key: 'processed', label: 'Processed', value: counts[STATUS.PROCESSED] || 0 },
+    { key: 'rejected', label: 'Rejected', value: rejectedTotal },
+    { key: 'urgent', label: 'Urgent — awaiting Finance', value: urgentAwaitingFinance, urgent: true }
   ];
   document.getElementById('analytics-stats').innerHTML = tiles.map(t =>
-    '<div class="stat-tile' + (t.urgent ? ' stat-tile-urgent' + (t.value > 0 ? ' has-urgent' : '') : '') + '">' +
+    '<div class="stat-tile clickable' + (analyticsListFilter === t.key ? ' selected' : '') + (t.urgent ? ' stat-tile-urgent' + (t.value > 0 ? ' has-urgent' : '') : '') + '"' +
+      ' tabindex="0" role="button" title="Show these requests" onclick="toggleAnalyticsListFilter(\'' + t.key + '\')"' +
+      ' onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();toggleAnalyticsListFilter(\'' + t.key + '\');}">' +
       '<div class="stat-label">' + escapeHtml(t.label) + '</div><div class="stat-value">' + t.value + '</div>' +
       (t.urgent && t.value > 0 ? '<div class="field-hint" style="color:var(--warn); margin-top:4px;">Finance should action these first.</div>' : '') +
     '</div>'
@@ -3392,7 +3421,8 @@ function renderAnalyticsStatusChart(){
     const pct = Math.round((n / total) * 100);
     const widthPct = Math.max(Math.round((n / max) * 100), n > 0 ? 2 : 0);
     const tipText = escapeHtml(s) + ': ' + n + ' (' + pct + '%)';
-    return '<div class="hbar-row" onmouseenter="showChartTooltip(event, \'' + tipText + '\')" onmousemove="moveChartTooltip(event)" onmouseleave="hideChartTooltip()">' +
+    const key = 'status:' + s;
+    return '<div class="hbar-row clickable' + (analyticsListFilter === key ? ' selected' : '') + '" data-status="' + escapeHtml(s) + '" onclick="toggleAnalyticsListFilter(\'status:\' + this.dataset.status)" onmouseenter="showChartTooltip(event, \'' + tipText + ' — click to list\')" onmousemove="moveChartTooltip(event)" onmouseleave="hideChartTooltip()">' +
       '<div class="hbar-label">' + escapeHtml(s) + '</div>' +
       '<div class="hbar-track"><div class="hbar-fill" style="width:' + widthPct + '%; background:' + STATUS_COLOR_VAR[s] + ';"></div></div>' +
       '<div class="hbar-value">' + n + '</div>' +
@@ -3731,10 +3761,61 @@ function switchAnalyticsSubtab(name){
   });
   document.querySelectorAll('#view-analytics .subview').forEach(v => v.classList.toggle('active', v.id === 'analytics-sub-' + name));
 }
+/* ---- Analytics: clicking a stat tile or status bar lists the matching requests ---- */
+var analyticsListFilter = null; // tile key ('total', 'pendingApproval', …) or 'status:<status>'
+var ANALYTICS_LIST_FILTERS = {
+  total:           { title: 'All requests',               test: r => true },
+  pendingApproval: { title: 'Pending approval',           test: r => r.status === STATUS.PENDING_APPROVAL },
+  pendingFinance:  { title: 'Pending finance',            test: r => r.status === STATUS.PENDING_FINANCE },
+  moreInfo:        { title: 'More info needed',           test: r => r.status === STATUS.PENDING_INFO },
+  processed:       { title: 'Processed',                  test: r => r.status === STATUS.PROCESSED },
+  rejected:        { title: 'Rejected',                   test: r => r.status === STATUS.REJECTED_APPROVER || r.status === STATUS.REJECTED_FINANCE },
+  urgent:          { title: 'Urgent — awaiting Finance',  test: r => r.isUrgent && r.status === STATUS.PENDING_FINANCE }
+};
+function analyticsListFilterDef(key){
+  if (!key) return null;
+  if (key.indexOf('status:') === 0) { const s = key.slice(7); return { title: s, test: r => r.status === s }; }
+  return ANALYTICS_LIST_FILTERS[key] || null;
+}
+function toggleAnalyticsListFilter(key){
+  setAnalyticsListFilter(analyticsListFilter === key ? null : key, true);
+}
+function setAnalyticsListFilter(key, scroll){
+  hideChartTooltip();
+  analyticsListFilter = key;
+  const search = document.getElementById('analytics-list-search');
+  if (search) search.value = '';
+  renderAnalyticsStats();
+  renderAnalyticsStatusChart();
+  renderAnalyticsList();
+  if (key && scroll) document.getElementById('analytics-list-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+function renderAnalyticsList(){
+  const card = document.getElementById('analytics-list-card');
+  const def = analyticsListFilterDef(analyticsListFilter);
+  if (!def) { card.style.display = 'none'; return; }
+  const kw = kwValue('analytics-list-search');
+  const all = analyticsScope().filter(def.test);
+  const rows = all.filter(r => matchesKeyword(r, kw))
+    .sort((a, b) => (b.submittedDate || '').localeCompare(a.submittedDate || ''));
+  card.style.display = '';
+  document.getElementById('analytics-list-title').textContent = def.title + ' (' + all.length + ')';
+  const email = myEmail();
+  document.getElementById('analytics-list-body').innerHTML = rows.length ? rows.map(r => {
+    const mode = (r.status === STATUS.DRAFT && (r.requestorEmail || '').toLowerCase() === email) ? 'edit-draft' : 'mine';
+    return '<tr' + urgentRowAttr(r) + ' onclick="openDetail(\'' + r.id + '\',\'' + mode + '\')"><td>' + escapeHtml(r.invoiceNumber || '—') + urgentTag(r) +
+      '</td><td>' + escapeHtml(r.department || '') + '</td><td>' + escapeHtml(r.vendorName || '') +
+      '</td><td>' + fmtAmount(r.amount, r.currency) + '</td><td>' + statusPill(r.status) +
+      '</td><td>' + (r.submittedDate ? fmtDateTime(r.submittedDate) : '') +
+      '</td><td>' + (r.paymentReference ? paymentRefCellHtml(r.paymentReference) : '') + '</td></tr>';
+  }).join('') : '<tr class="empty-row"><td colspan="7">' + (all.length ? 'No requests match your search.' : 'No requests in this group.') + '</td></tr>';
+}
+
 function renderAnalyticsAll(){
   renderAnalyticsScopeNote();
   renderAnalyticsStats();
   renderAnalyticsStatusChart();
+  renderAnalyticsList();
   renderAnalyticsTrendChart();
   renderAnalyticsTimeline();
 }
