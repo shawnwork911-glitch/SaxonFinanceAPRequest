@@ -679,9 +679,36 @@
       </table>
     </div>
     <div class="card">
-      <div class="card-head"><h2>Finance History</h2></div>
+      <div class="toolbar-row">
+        <h2 style="margin:0;">Finance History</h2>
+        <div class="filters">
+          <select class="filter-select" id="finance-hist-entity" onchange="renderFinanceTable()" title="Payment entity">
+            <option value="">All entities</option>
+            <option value="SG">SG Payment</option>
+            <option value="MY">MY Payment</option>
+          </select>
+          <select class="filter-select" id="finance-hist-range" onchange="applyFinanceHistRange()" title="Payment date range">
+            <option value="">All payment dates</option>
+            <option value="this-1h">This month: 1st – 15th</option>
+            <option value="this-2h">This month: 16th – end</option>
+            <option value="this-month">This month</option>
+            <option value="last-1h">Last month: 1st – 15th</option>
+            <option value="last-2h">Last month: 16th – end</option>
+            <option value="last-month">Last month</option>
+            <option value="last-30">Last 30 days</option>
+            <option value="custom">Custom range…</option>
+          </select>
+          <span id="finance-hist-custom" style="display:none; align-items:center; gap:6px;">
+            <input type="date" class="filter-select" id="finance-hist-from" onchange="onFinanceHistDateEdit()" title="From">
+            <span class="small muted">to</span>
+            <input type="date" class="filter-select" id="finance-hist-to" onchange="onFinanceHistDateEdit()" title="To">
+          </span>
+          <button type="button" class="btn btn-ghost" onclick="clearFinanceHistoryFilters()">Clear</button>
+        </div>
+      </div>
+      <div class="muted small" id="finance-hist-summary" style="margin:-4px 0 8px;"></div>
       <table class="data-table">
-        <thead><tr><th>Document Number</th><th>Department</th><th>Vendor</th><th>Amount</th><th>Outcome</th><th>Verification</th><th>Decided</th><th>Payment ref.</th><th>Recorded in BC</th></tr></thead>
+        <thead><tr><th>Document Number</th><th>Department</th><th>Vendor</th><th>Amount</th><th>Outcome</th><th>Verification</th><th>Decided</th><th>Payment ref.</th><th><label class="bc-tick" title="Tick / untick every eligible row currently shown"><input type="checkbox" id="bc-select-all" onchange="handleBCSelectAll(this)"> Recorded in BC</label></th></tr></thead>
         <tbody id="finance-history-body"></tbody>
       </table>
     </div>
@@ -2049,6 +2076,194 @@ async function handleToggleBC(itemId, cb){
     showToast('Could not update "Recorded in BC": ' + e.message, 'error');
   }
 }
+/* ---- Payment reference = entity + payment date ----
+   Stored in the PaymentReference column as e.g. "SG Payment - 2026-11-02" (ISO date so it
+   can be filtered); shown as "SG Payment · 2 Nov 2026". Older free-text references are
+   read by parsePaymentRef() and shown in the same format where possible. */
+const PAYMENT_ENTITIES = ['SG', 'MY'];
+function localIsoDate(d){
+  d = d || new Date();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+/* Reads both the new format ("SG Payment - 2026-11-02") and the older free-text references
+   already in the list, e.g. "MY_Payment - 26.10.2026", "via Saxon SG - OCBC dated 06.10.2026",
+   "via Saxon SG - Wise USD on 22 Sep 2026", "SG_Payment - TBC". Display only — the stored
+   SharePoint value isn't changed. Returns null when no SG / MY entity can be found.
+   { entity, date ('' if none / TBC), tbc, exact (true = already in the new format), raw } */
+const PAYREF_MONTHS = { jan:1, feb:2, mar:3, apr:4, may:5, jun:6, jul:7, aug:8, sep:9, oct:10, nov:11, dec:12 };
+function validYmd(y, m, d){
+  if (!(y > 1999 && m >= 1 && m <= 12 && d >= 1 && d <= 31)) return '';
+  const dt = new Date(y, m - 1, d);
+  if (dt.getMonth() !== m - 1) return '';
+  return y + '-' + String(m).padStart(2, '0') + '-' + String(d).padStart(2, '0');
+}
+function firstDateIn(text){
+  const found = [];
+  let m;
+  const iso = /(\d{4})-(\d{1,2})-(\d{1,2})/g;
+  while ((m = iso.exec(text))) found.push({ i: m.index, v: validYmd(+m[1], +m[2], +m[3]) });
+  const dmy = /(?:^|[^\d])(\d{1,2})[.\/](\d{1,2})[.\/](\d{4})/g;
+  while ((m = dmy.exec(text))) found.push({ i: m.index, v: validYmd(+m[3], +m[2], +m[1]) });
+  const named = /(\d{1,2})\s*(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?,?\s*(\d{4})/gi;
+  while ((m = named.exec(text))) found.push({ i: m.index, v: validYmd(+m[3], PAYREF_MONTHS[m[2].toLowerCase().slice(0, 3)], +m[1]) });
+  const ok = found.filter(f => f.v).sort((a, b) => a.i - b.i);
+  return ok.length ? ok[0].v : '';
+}
+function parsePaymentRef(ref){
+  const raw = String(ref || '').trim();
+  if (!raw) return null;
+  const exact = /^\s*(SG|MY)\s+Payment\s*-\s*(\d{4}-\d{2}-\d{2})\s*$/i.exec(raw);
+  if (exact) return { entity: exact[1].toUpperCase(), date: exact[2], tbc: false, exact: true, raw };
+  const em = /(?:^|[^A-Za-z])(SG|MY)(?=[^A-Za-z]|$)/i.exec(raw);
+  if (!em) return null;
+  return { entity: em[1].toUpperCase(), date: firstDateIn(raw), tbc: /\bTBC\b/i.test(raw), exact: false, raw };
+}
+function buildPaymentRef(entity, date){ return entity + ' Payment - ' + date; }
+function fmtPaymentRef(ref){
+  const p = parsePaymentRef(ref);
+  if (!p) return String(ref || '');
+  let when = 'date TBC';
+  if (p.date) {
+    const [y, mo, d] = p.date.split('-').map(Number);
+    when = new Date(y, mo - 1, d).toLocaleDateString('en-SG', { year: 'numeric', month: 'short', day: 'numeric' });
+  }
+  return p.entity + ' Payment · ' + when;
+}
+/* Same text plus, for older references, the original wording on hover / underneath. */
+function paymentRefCellHtml(ref){
+  const p = parsePaymentRef(ref);
+  if (!p) return escapeHtml(ref || '—');
+  if (p.exact) return escapeHtml(fmtPaymentRef(ref));
+  return '<span title="Original: ' + escapeHtml(p.raw) + '">' + escapeHtml(fmtPaymentRef(ref)) + '</span>';
+}
+function paymentRefDetailHtml(ref){
+  const p = parsePaymentRef(ref);
+  if (!p) return escapeHtml(ref || '—');
+  return escapeHtml(fmtPaymentRef(ref)) + (p.exact ? '' : '<div class="muted small">Original: ' + escapeHtml(p.raw) + '</div>');
+}
+function paymentEntityOf(r){
+  const p = parsePaymentRef(r.paymentReference);
+  return p ? p.entity : entityForCurrency(r.currency);
+}
+/* Payment date for filtering: the date in the reference (new or old format). If the reference
+   has an entity but no date (e.g. "TBC") there is no payment date. For processed requests whose
+   reference can't be read at all (or is blank), the Finance decision date is used.
+   Rejected requests have no payment date. */
+function paymentDateOf(r){
+  const p = parsePaymentRef(r.paymentReference);
+  if (p) return p.date;
+  if (r.status === STATUS.PROCESSED && r.financeDecisionDate) {
+    const d = new Date(r.financeDecisionDate);
+    if (!isNaN(d)) return localIsoDate(d);
+  }
+  return '';
+}
+function paymentRefFieldsHtml(prefix, record, required){
+  const p = parsePaymentRef(record.paymentReference);
+  const entity = p ? p.entity : entityForCurrency(record.currency);
+  const date = (p && p.date) || localIsoDate();
+  const legacy = (!p || !p.exact) && record.paymentReference
+    ? '<div class="field-hint">Previous reference: ' + escapeHtml(record.paymentReference) + ' (will be replaced when saved)</div>' : '';
+  return '<div class="field-row"><label class="field-label">Payment reference' + (required ? ' <span class="req">*</span>' : '') + '</label>' +
+    '<div style="display:flex; gap:10px; flex-wrap:wrap;">' +
+      '<select class="text-field" id="' + prefix + '-entity" style="max-width:180px;">' +
+        PAYMENT_ENTITIES.map(e => '<option value="' + e + '"' + (e === entity ? ' selected' : '') + '>' + e + ' Payment</option>').join('') +
+      '</select>' +
+      '<input class="text-field" type="date" id="' + prefix + '-date" value="' + date + '" style="max-width:180px;" title="Payment date">' +
+    '</div>' +
+    '<div class="field-hint">Entity is pre-selected from the request currency (' + escapeHtml(record.currency || '—') + '); pick the payment date.</div>' + legacy +
+    '</div>';
+}
+function readPaymentRef(prefix){
+  const entity = (document.getElementById(prefix + '-entity') || {}).value || '';
+  const date = (document.getElementById(prefix + '-date') || {}).value || '';
+  if (!entity || !date) return '';
+  return buildPaymentRef(entity, date);
+}
+function clearFinanceHistoryFilters(){
+  ['finance-hist-entity', 'finance-hist-range', 'finance-hist-from', 'finance-hist-to'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  document.getElementById('finance-hist-custom').style.display = 'none';
+  renderFinanceTable();
+}
+/* Payment date range presets (semi-monthly halves match the payment runs / period folders).
+   Picking one fills the From / To dates; "Custom range…" shows them for editing. */
+function financeHistRangeDates(key){
+  const now = new Date();
+  const y = now.getFullYear(), m = now.getMonth();
+  const lastDay = (yy, mm) => new Date(yy, mm + 1, 0).getDate();
+  const ly = m === 0 ? y - 1 : y, lm = m === 0 ? 11 : m - 1;
+  const d = (yy, mm, dd) => localIsoDate(new Date(yy, mm, dd));
+  switch (key) {
+    case 'this-1h': return [d(y, m, 1), d(y, m, 15)];
+    case 'this-2h': return [d(y, m, 16), d(y, m, lastDay(y, m))];
+    case 'this-month': return [d(y, m, 1), d(y, m, lastDay(y, m))];
+    case 'last-1h': return [d(ly, lm, 1), d(ly, lm, 15)];
+    case 'last-2h': return [d(ly, lm, 16), d(ly, lm, lastDay(ly, lm))];
+    case 'last-month': return [d(ly, lm, 1), d(ly, lm, lastDay(ly, lm))];
+    case 'last-30': { const f = new Date(now); f.setDate(f.getDate() - 29); return [localIsoDate(f), localIsoDate(now)]; }
+    default: return ['', ''];
+  }
+}
+function applyFinanceHistRange(){
+  const key = document.getElementById('finance-hist-range').value;
+  const from = document.getElementById('finance-hist-from'), to = document.getElementById('finance-hist-to');
+  document.getElementById('finance-hist-custom').style.display = key ? 'inline-flex' : 'none';
+  if (key !== 'custom') { const [f, t] = financeHistRangeDates(key); from.value = f; to.value = t; }
+  renderFinanceTable();
+}
+function onFinanceHistDateEdit(){
+  const from = document.getElementById('finance-hist-from'), to = document.getElementById('finance-hist-to');
+  if (from.value && to.value && from.value > to.value) { const t = from.value; from.value = to.value; to.value = t; } // keep the range the right way round
+  document.getElementById('finance-hist-range').value = (from.value || to.value) ? 'custom' : '';
+  if (!from.value && !to.value) document.getElementById('finance-hist-custom').style.display = 'none';
+  renderFinanceTable();
+}
+
+/* ---- "Select all" for Recorded in BC on Finance History (acts on the rows currently shown) ---- */
+let financeHistoryShown = [];
+function syncBCSelectAll(){
+  const box = document.getElementById('bc-select-all');
+  if (!box) return;
+  const eligible = financeHistoryShown.filter(canTickBC);
+  const done = eligible.filter(r => r.bcRecorded).length;
+  box.disabled = eligible.length === 0;
+  box.checked = eligible.length > 0 && done === eligible.length;
+  box.indeterminate = done > 0 && done < eligible.length;
+}
+async function handleBCSelectAll(box){
+  const eligible = financeHistoryShown.filter(canTickBC);
+  const tick = box.checked;
+  const targets = eligible.filter(r => !!r.bcRecorded !== tick);
+  if (!targets.length) { syncBCSelectAll(); return; }
+  if (!confirm((tick ? 'Mark ' : 'Untick ') + targets.length + ' request(s) currently shown ' + (tick ? 'as recorded in BC?' : 'from "Recorded in BC"?'))) { syncBCSelectAll(); return; }
+  const colMap = await getColumnMap();
+  if (!colMap['BCRecorded']) {
+    syncBCSelectAll();
+    showToast('The "BCRecorded" column is missing on the SharePoint list. Add Single line of text columns BCRecorded, BCRecordedBy and BCRecordedDate, then refresh.', 'error');
+    return;
+  }
+  box.disabled = true;
+  const now = nowIso();
+  let ok = 0, failed = 0, firstErr = '';
+  const queue = targets.slice();
+  async function worker(){
+    while (queue.length) {
+      const r = queue.shift();
+      try {
+        await updateRequestItem(r.id, {
+          bcRecorded: tick,
+          bcRecordedBy: tick ? currentAccount.username : '',
+          bcRecordedDate: tick ? now : '',
+          historyLog: appendHistory(r.historyLog, currentAccount.username + (tick ? ' marked as recorded in BC (select all).' : ' unticked "Recorded in BC" (select all).'))
+        });
+        ok++;
+      } catch (e) { failed++; if (!firstErr) firstErr = e.message; }
+    }
+  }
+  await Promise.all([worker(), worker(), worker(), worker()]);
+  showToast(failed ? ok + ' updated, ' + failed + ' failed (' + firstErr + ').' : ok + ' request(s) ' + (tick ? 'marked as recorded in BC.' : 'unticked.'), failed ? 'error' : 'success');
+  await refreshAll();
+}
 function urgentTag(record){
   // Solid fill (not the usual bg/fg pill pair) so it stays a visible chip against the
   // red-tinted row highlight urgent rows also get — a --bad-bg badge would blend into it.
@@ -2517,7 +2732,7 @@ function renderMineTable(){
   body.innerHTML = rows.length ? rows.map(r =>
     '<tr' + urgentRowAttr(r) + ' onclick="openDetail(\'' + r.id + '\',\'mine\')"><td>' + escapeHtml(r.invoiceNumber || '—') + urgentTag(r) + '</td><td>' + escapeHtml(r.department) +
     '</td><td>' + escapeHtml(r.vendorName) + '</td><td>' + fmtAmount(r.amount, r.currency) +
-    '</td><td>' + statusPill(r.status) + '</td><td>' + (r.financeDecisionDate ? fmtDateTime(r.financeDecisionDate) : '') + '</td><td>' + escapeHtml(r.paymentReference || '') + '</td></tr>'
+    '</td><td>' + statusPill(r.status) + '</td><td>' + (r.financeDecisionDate ? fmtDateTime(r.financeDecisionDate) : '') + '</td><td>' + (r.paymentReference ? paymentRefCellHtml(r.paymentReference) : '') + '</td></tr>'
   ).join('') : '<tr class="empty-row"><td colspan="7">No requests yet.</td></tr>';
 
   const drafts = mine.filter(r => r.status === STATUS.DRAFT);
@@ -2941,8 +3156,22 @@ function renderFinanceTable(){
   const bcFilter = (document.getElementById('finance-bc-filter') || {}).value || '';
   const pending = allItemsCache.filter(r => r.status === STATUS.PENDING_FINANCE && (!deptFilter || r.department === deptFilter) && verifyFilterMatch(r, verFilter) && bcFilterMatch(r, bcFilter) && matchesKeyword(r, finKw))
     .sort((a, b) => (Number(!!b.isUrgent) - Number(!!a.isUrgent)) || (a.approvalDate || '').localeCompare(b.approvalDate || ''));
-  const history = allItemsCache.filter(r => (r.status === STATUS.PROCESSED || r.status === STATUS.REJECTED_FINANCE) && (!deptFilter || r.department === deptFilter) && verifyFilterMatch(r, verFilter) && bcFilterMatch(r, bcFilter) && matchesKeyword(r, finKw))
+  const histEntity = kwValue('finance-hist-entity');
+  const histFrom = kwValue('finance-hist-from');
+  const histTo = kwValue('finance-hist-to');
+  const history = allItemsCache.filter(r => (r.status === STATUS.PROCESSED || r.status === STATUS.REJECTED_FINANCE) && (!deptFilter || r.department === deptFilter) && verifyFilterMatch(r, verFilter) && bcFilterMatch(r, bcFilter) && matchesKeyword(r, finKw) &&
+      (!histEntity || paymentEntityOf(r) === histEntity) &&
+      (!histFrom || (paymentDateOf(r) && paymentDateOf(r) >= histFrom)) &&
+      (!histTo || (paymentDateOf(r) && paymentDateOf(r) <= histTo)))
     .sort((a, b) => (b.financeDecisionDate || '').localeCompare(a.financeDecisionDate || ''));
+  const shownHistory = history.slice(0, histEntity || histFrom || histTo ? 500 : 100);
+  financeHistoryShown = shownHistory;
+  const sumEl = document.getElementById('finance-hist-summary');
+  if (sumEl) sumEl.textContent = (histEntity || histFrom || histTo)
+    ? history.length + ' request(s) match' +
+      (histFrom || histTo ? ' — payment date ' + (histFrom ? fmtDate(histFrom + 'T00:00:00') : 'any') + ' to ' + (histTo ? fmtDate(histTo + 'T00:00:00') : 'any') : '') +
+      (history.length > shownHistory.length ? ' — showing the latest ' + shownHistory.length : '') + '.'
+    : '';
   renderCurrencyTotals('finance-totals', pending);
   // The tab badge ignores the keyword search (same as the Approvals badge), so typing doesn't change it.
   const finBadge = allItemsCache.filter(r => r.status === STATUS.PENDING_FINANCE && (!deptFilter || r.department === deptFilter)).length;
@@ -2953,11 +3182,12 @@ function renderFinanceTable(){
     '</td><td>' + escapeHtml(r.requestorName) + '</td><td>' + escapeHtml(r.vendorName) + '</td><td>' + fmtAmount(r.amount, r.currency) +
     '</td><td>' + verifyCell(r) + '</td><td>' + escapeHtml(r.approverEmail) + '</td><td>' + bcCheckboxHtml(r) + '</td></tr>'
   ).join('') : '<tr class="empty-row"><td colspan="8">No requests awaiting Finance review.</td></tr>';
-  document.getElementById('finance-history-body').innerHTML = history.length ? history.slice(0, 100).map(r =>
+  syncBCSelectAll();
+  document.getElementById('finance-history-body').innerHTML = shownHistory.length ? shownHistory.map(r =>
     '<tr' + urgentRowAttr(r) + ' onclick="openDetail(\'' + r.id + '\',\'mine\')"><td>' + escapeHtml(r.invoiceNumber || '—') + urgentTag(r) + '</td><td>' + escapeHtml(r.department) +
     '</td><td>' + escapeHtml(r.vendorName) + '</td><td>' + fmtAmount(r.amount, r.currency) + '</td><td>' + statusPill(r.status) +
-    '</td><td>' + verifyCell(r) + '</td><td>' + fmtDateTime(r.financeDecisionDate) + '</td><td>' + escapeHtml(r.paymentReference || '—') + '</td><td>' + bcCheckboxHtml(r) + '</td></tr>'
-  ).join('') : '<tr class="empty-row"><td colspan="9">No history yet.</td></tr>';
+    '</td><td>' + verifyCell(r) + '</td><td>' + fmtDateTime(r.financeDecisionDate) + '</td><td>' + paymentRefCellHtml(r.paymentReference) + '</td><td>' + bcCheckboxHtml(r) + '</td></tr>'
+  ).join('') : '<tr class="empty-row"><td colspan="9">' + (histEntity || histFrom || histTo ? 'No history matches these filters.' : 'No history yet.') + '</td></tr>';
 }
 
 /* ---- Analytics ---- */
@@ -3582,7 +3812,7 @@ function approvalFinanceSummary(record){
     html += '<hr class="section-divider"><div class="detail-grid">' +
       '<div><div class="k">Finance decision</div>' + escapeHtml(record.financeDecision || '—') + ' by ' + escapeHtml(record.financeReviewer) + '</div>' +
       '<div><div class="k">Decided</div>' + fmtDateTime(record.financeDecisionDate) + '</div>' +
-      '<div><div class="k">Payment reference</div>' + escapeHtml(record.paymentReference || '—') + '</div>' +
+      '<div><div class="k">Payment reference</div>' + paymentRefDetailHtml(record.paymentReference) + '</div>' +
       '<div class="full"><div class="k">Finance comments</div>' + escapeHtml(record.financeComments || '—') + '</div>' +
     '</div>';
   }
@@ -3894,6 +4124,7 @@ function renderModalBody(record, mode){
 
   if (mode === 'approve') {
     html += '<hr class="section-divider">' +
+      (record.department === OPS_DEPT_AUTO_CHECK ? '<div class="field-hint" style="margin-bottom:10px;">Approving confirms you have checked all supporting documents — Verification will be set to <strong>Checked</strong> (existing verification notes are kept).</div>' : '') +
       (record.isUrgent ? '<div class="field-hint" style="margin-bottom:10px;">This request was marked <strong>Urgent Payment</strong> and routed directly to you, bypassing the ' + escapeHtml(record.department) + ' department approver.</div>' : '') +
       '<div class="field-row" id="decision-comment-row" style="display:none;"><label class="field-label">Comments <span class="req">*</span></label>' +
       '<textarea class="text-field" id="decision-comment"></textarea></div>' +
@@ -3904,8 +4135,7 @@ function renderModalBody(record, mode){
   }
   if (mode === 'finance') {
     html += '<hr class="section-divider">' +
-      '<div class="field-row"><label class="field-label">Payment reference</label>' +
-      '<input class="text-field" id="payment-ref" placeholder="e.g. bank transaction ID"></div>' +
+      paymentRefFieldsHtml('payment-ref', record, true) +
       '<div class="field-row"><label class="field-label">Comments (required when requesting more info or rejecting)</label>' +
       '<textarea class="text-field" id="decision-comment"></textarea></div>' +
       '<div class="btn-row">' +
@@ -3922,8 +4152,7 @@ function renderModalBody(record, mode){
   if (mode === 'finance-amend') {
     html += '<hr class="section-divider">' +
       '<div class="field-hint" style="margin-bottom:10px; padding:10px 12px; border-radius:8px; background:var(--warn-bg); color:var(--warn);">Amending a processed request. The status stays <strong>Processed</strong>; only the payment reference and Finance comments change.</div>' +
-      '<div class="field-row"><label class="field-label">Payment reference</label>' +
-      '<input class="text-field" id="amend-payment-ref" value="' + escapeHtml(record.paymentReference || '') + '" placeholder="e.g. bank transaction ID"></div>' +
+      paymentRefFieldsHtml('amend-payment-ref', record, true) +
       '<div class="field-row"><label class="field-label">Finance comments</label>' +
       '<textarea class="text-field" id="amend-finance-comments">' + escapeHtml(record.financeComments || '') + '</textarea></div>' +
       '<div class="btn-row">' +
@@ -4177,6 +4406,8 @@ function handleRejectClick(){
   }
   handleApprovalDecision('reject');
 }
+/* Department whose approval also marks the request's Verification as Checked — see handleApprovalDecision(). */
+const OPS_DEPT_AUTO_CHECK = 'Operations';
 async function handleApprovalDecision(decision){
   const record = modalContext.record;
   const comment = (document.getElementById('decision-comment').value || '').trim();
@@ -4207,6 +4438,20 @@ async function handleApprovalDecision(decision){
         status: decision === 'approve' ? STATUS.PENDING_FINANCE : STATUS.REJECTED_APPROVER,
         historyLog: appendHistory(record.historyLog, currentAccount.username + ' ' + (decision === 'approve' ? 'approved' : 'rejected') + ' the request.' + (comment ? ' Comment: ' + comment : ''))
       };
+      /* Operations: the approver checks the documents as part of approving, so approval sets
+         Verification to Checked. Earlier verification notes are kept; a line is appended. */
+      if (decision === 'approve' && record.department === OPS_DEPT_AUTO_CHECK) {
+        const prevStatus = String(record.verificationStatus || '').trim();
+        const note = 'All documents checked by approver ' + currentAccount.username + ' on ' + fmtDateTime(patch.approvalDate) +
+          (prevStatus && prevStatus.toLowerCase() !== 'checked' ? ' (was: ' + prevStatus + ').' : '.');
+        Object.assign(patch, {
+          _allowVerificationWrite: true,
+          verificationStatus: 'Checked',
+          verificationDate: patch.approvalDate,
+          verificationNotes: record.verificationNotes ? record.verificationNotes + '\n' + note : note
+        });
+        patch.historyLog = appendHistory(patch.historyLog, 'Verification set to Checked on approval (' + OPS_DEPT_AUTO_CHECK + ')' + (prevStatus ? ', was ' + prevStatus : '') + '.');
+      }
     }
     await updateRequestItem(record.id, patch);
     if (decision === 'approve') {
@@ -4322,7 +4567,9 @@ async function handleFinanceDecision(decision){
   // point is upstream, at the department / urgent approver step.
   const record = modalContext.record;
   const comment = (document.getElementById('decision-comment').value || '').trim();
-  const paymentRef = (document.getElementById('payment-ref').value || '').trim();
+  // Payment reference (entity + payment date) only applies when marking processed / paid.
+  const paymentRef = decision === 'process' ? readPaymentRef('payment-ref') : '';
+  if (decision === 'process' && !paymentRef) { showToast('Please choose the payment entity and payment date.', 'error'); return; }
   if (decision === 'info' && !comment) {
     showToast('Please explain what additional information is needed.', 'error');
     return;
@@ -4342,7 +4589,7 @@ async function handleFinanceDecision(decision){
       financeComments: comment,
       paymentReference: paymentRef,
       status: statusByDecision[decision],
-      historyLog: appendHistory(record.historyLog, currentAccount.username + ' (Finance) ' + historyVerb[decision] + (comment ? ' Comment: ' + comment : '') + (paymentRef ? ' Payment ref: ' + paymentRef : ''))
+      historyLog: appendHistory(record.historyLog, currentAccount.username + ' (Finance) ' + historyVerb[decision] + (comment ? ' Comment: ' + comment : '') + (paymentRef ? ' Payment ref: ' + fmtPaymentRef(paymentRef) : ''))
     };
     if (decision === 'process') {
       const vs = String(record.verificationStatus || '').trim();
@@ -4385,7 +4632,8 @@ async function handleFinanceAmend(itemId){
   if (!record) return;
   if (!isFinanceUser()) { showToast('Only the Finance team can amend processed requests.', 'error'); return; }
   if (record.status !== STATUS.PROCESSED) { showToast('Only processed requests can be amended here.', 'error'); return; }
-  const newRef = (document.getElementById('amend-payment-ref').value || '').trim();
+  const newRef = readPaymentRef('amend-payment-ref');
+  if (!newRef) { showToast('Please choose the payment entity and payment date.', 'error'); return; }
   const newComments = (document.getElementById('amend-finance-comments').value || '').trim();
   const oldRef = String(record.paymentReference || '').trim();
   const oldComments = String(record.financeComments || '').trim();
@@ -4394,7 +4642,7 @@ async function handleFinanceAmend(itemId){
   setBusy(btn, true, 'Saving…');
   try {
     const changes = [];
-    if (newRef !== oldRef) changes.push('Payment ref: "' + oldRef + '" → "' + newRef + '"');
+    if (newRef !== oldRef) changes.push('Payment ref: "' + fmtPaymentRef(oldRef) + '" → "' + fmtPaymentRef(newRef) + '"');
     if (newComments !== oldComments) changes.push('Finance comments: "' + oldComments + '" → "' + newComments + '"');
     await updateRequestItem(record.id, {
       paymentReference: newRef,
@@ -4417,7 +4665,7 @@ async function notifyRequestorOfProcessed(record, comment, paymentRef){
       'Department: ' + escapeHtml(record.department),
       'Vendor: ' + escapeHtml(record.vendorName),
       'Amount: ' + escapeHtml(fmtAmount(record.amount, record.currency)),
-      paymentRef ? 'Payment reference: ' + escapeHtml(paymentRef) : '',
+      paymentRef ? 'Payment reference: ' + escapeHtml(fmtPaymentRef(paymentRef)) : '',
       comment ? '<strong>Finance\'s comment:</strong> ' + escapeHtml(comment) : '',
       '',
       '<a href="' + escapeHtml(APP_URL) + '">Open the AP Request System</a>, go to My Requests and open this request to view the details.'
