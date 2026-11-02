@@ -270,6 +270,8 @@
   .status-pending-finance { background: var(--accent-light); color: var(--accent); }
   .status-pending-info { background: var(--info-bg); color: var(--info); }
   .status-processed { background: var(--good-bg); color: var(--good); }
+  .bc-tick { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-size: 13px; }
+  .bc-tick input { width: 17px; height: 17px; cursor: pointer; accent-color: var(--good); }
   .verify-none { background: var(--line); color: var(--sub); }
   .verify-ok { background: var(--good-bg); color: var(--good); }
   .verify-warn { background: var(--warn-bg); color: var(--warn); }
@@ -662,19 +664,24 @@
           <select class="filter-select" id="finance-verify-filter" onchange="renderFinanceTable()">
             <option value="">All verification statuses</option>
           </select>
+          <select class="filter-select" id="finance-bc-filter" onchange="renderFinanceTable()">
+            <option value="">BC: all</option>
+            <option value="no">Not yet recorded in BC</option>
+            <option value="yes">Recorded in BC</option>
+          </select>
           <button type="button" class="btn btn-ghost" onclick="refreshAll()">Refresh</button>
         </div>
       </div>
       <div class="currency-totals" id="finance-totals"></div>
       <table class="data-table">
-        <thead><tr><th>Document Number</th><th>Department</th><th>Requestor</th><th>Vendor</th><th>Amount</th><th>Verification</th><th>Approved by</th></tr></thead>
+        <thead><tr><th>Document Number</th><th>Department</th><th>Requestor</th><th>Vendor</th><th>Amount</th><th>Verification</th><th>Approved by</th><th>Recorded in BC</th></tr></thead>
         <tbody id="finance-table-body"></tbody>
       </table>
     </div>
     <div class="card">
       <div class="card-head"><h2>Finance History</h2></div>
       <table class="data-table">
-        <thead><tr><th>Document Number</th><th>Department</th><th>Vendor</th><th>Amount</th><th>Outcome</th><th>Verification</th><th>Decided</th><th>Payment ref.</th></tr></thead>
+        <thead><tr><th>Document Number</th><th>Department</th><th>Vendor</th><th>Amount</th><th>Outcome</th><th>Verification</th><th>Decided</th><th>Payment ref.</th><th>Recorded in BC</th></tr></thead>
         <tbody id="finance-history-body"></tbody>
       </table>
     </div>
@@ -1231,7 +1238,10 @@ const DATA_FIELD_MAP = {
   FinanceDecisionDate: 'financeDecisionDate', FinanceComments: 'financeComments',
   PaymentReference: 'paymentReference', SubmittedDate: 'submittedDate', HistoryLog: 'historyLog',
   VerificationStatus: 'verificationStatus', VerificationNotes: 'verificationNotes', VerificationDate: 'verificationDate', // set outside this app (e.g. Power Automate) — read-only here
-  Comments: 'comments' // JSON array of { at, by, name, text } — see commentsHtml()
+  Comments: 'comments', // JSON array of { at, by, name, text } — see commentsHtml()
+  /* Finance-only bookkeeping flag: ticked once the request has been entered in Business Central.
+     Needs three Single-line-of-text columns on the list: BCRecorded ("Yes"/"No"), BCRecordedBy, BCRecordedDate. */
+  BCRecorded: 'bcRecorded', BCRecordedBy: 'bcRecordedBy', BCRecordedDate: 'bcRecordedDate'
 };
 
 let currentAccount = null;
@@ -1638,7 +1648,7 @@ function recordToFields(record, colMap){
     if (key.indexOf('verification') === 0 && !record._allowVerificationWrite) return; // normally read-only; only the "Mark as Checked" action writes these
     if (record[key] === undefined) return;
     let value = record[key];
-    if (key === 'isUrgent') value = value ? 'Yes' : 'No';
+    if (key === 'isUrgent' || key === 'bcRecorded') value = value ? 'Yes' : 'No';
     else if (typeof value === 'number' || typeof value === 'boolean') value = String(value);
     fields[internal] = value;
   });
@@ -1650,7 +1660,7 @@ function itemToRecord(item, colMap){
     const key = DATA_FIELD_MAP[display];
     const internal = colMap[display];
     let value = internal ? (item.fields[internal] ?? '') : '';
-    if (key === 'isUrgent') value = (value === 'Yes' || value === true || value === 'true');
+    if (key === 'isUrgent' || key === 'bcRecorded') value = (value === 'Yes' || value === true || value === 'true');
     rec[key] = value;
   });
   return rec;
@@ -1982,6 +1992,62 @@ async function handleMarkChecked(itemId){
     await refreshAll();
     openDetail(itemId, mode);
   } catch (e) { showToast('Could not update verification status: ' + e.message, 'error'); setBusy(btn, false); }
+}
+/* ---- "Recorded in BC" tick (Finance only) ----
+   A bookkeeping flag for Finance: ticked once the request has been entered in
+   Business Central. Doesn't change the request's status or notify anyone;
+   each tick / untick is written to the History log. */
+function canTickBC(record){
+  return isFinanceUser() && record && record.status !== STATUS.DRAFT &&
+    record.status !== STATUS.REJECTED_APPROVER && record.status !== STATUS.REJECTED_FINANCE;
+}
+function bcFilterMatch(r, val){
+  if (!val) return true;
+  return val === 'yes' ? !!r.bcRecorded : !r.bcRecorded;
+}
+function bcCheckboxHtml(record, withLabel){
+  if (!canTickBC(record)) return record && record.bcRecorded ? '<span class="status-pill verify-ok">Recorded</span>' : '<span class="muted">—</span>';
+  const tip = record.bcRecorded
+    ? 'Recorded by ' + (record.bcRecordedBy || '?') + (record.bcRecordedDate ? ' on ' + fmtDateTime(record.bcRecordedDate) : '')
+    : 'Tick once this request has been recorded in BC';
+  return '<label class="bc-tick" title="' + escapeHtml(tip) + '" onclick="event.stopPropagation();">' +
+    '<input type="checkbox" ' + (record.bcRecorded ? 'checked ' : '') +
+    'onclick="event.stopPropagation();" onchange="handleToggleBC(\'' + record.id + '\', this)">' +
+    (withLabel ? ' <span>' + (record.bcRecorded ? 'Recorded in BC' : 'Not yet recorded in BC') + '</span>' : '') +
+    '</label>' +
+    (record.bcRecorded && (record.bcRecordedBy || record.bcRecordedDate)
+      ? '<div class="muted small" style="margin-top:2px;">' + escapeHtml((record.bcRecordedBy || '').split('@')[0]) + (record.bcRecordedDate ? ' · ' + fmtDate(record.bcRecordedDate) : '') + '</div>'
+      : '');
+}
+async function handleToggleBC(itemId, cb){
+  const record = findRecord(itemId);
+  if (!record || !canTickBC(record)) { if (cb) cb.checked = !!(record && record.bcRecorded); return; }
+  const ticked = !!cb.checked;
+  if (!ticked && !confirm('Untick "Recorded in BC" for this request?')) { cb.checked = true; return; }
+  const colMap = await getColumnMap();
+  if (!colMap['BCRecorded']) {
+    cb.checked = !ticked;
+    showToast('The "BCRecorded" column is missing on the SharePoint list. Add Single line of text columns BCRecorded, BCRecordedBy and BCRecordedDate, then refresh.', 'error');
+    return;
+  }
+  cb.disabled = true;
+  try {
+    const now = nowIso();
+    await updateRequestItem(record.id, {
+      bcRecorded: ticked,
+      bcRecordedBy: ticked ? currentAccount.username : '',
+      bcRecordedDate: ticked ? now : '',
+      historyLog: appendHistory(record.historyLog, currentAccount.username + (ticked ? ' marked as recorded in BC.' : ' unticked "Recorded in BC".'))
+    });
+    showToast(ticked ? 'Marked as recorded in BC.' : '"Recorded in BC" unticked.', 'success');
+    const modalOpen = modalContext && modalContext.record && modalContext.record.id === itemId;
+    const mode = modalOpen ? modalContext.mode : null;
+    await refreshAll();
+    if (modalOpen) openDetail(itemId, mode);
+  } catch (e) {
+    cb.checked = !ticked; cb.disabled = false;
+    showToast('Could not update "Recorded in BC": ' + e.message, 'error');
+  }
 }
 function urgentTag(record){
   // Solid fill (not the usual bg/fg pill pair) so it stays a visible chip against the
@@ -2872,9 +2938,10 @@ function renderFinanceTable(){
   const finKw = kwValue('finance-search');
   syncVerifyFilter('finance-verify-filter');
   const verFilter = document.getElementById('finance-verify-filter').value;
-  const pending = allItemsCache.filter(r => r.status === STATUS.PENDING_FINANCE && (!deptFilter || r.department === deptFilter) && verifyFilterMatch(r, verFilter) && matchesKeyword(r, finKw))
+  const bcFilter = (document.getElementById('finance-bc-filter') || {}).value || '';
+  const pending = allItemsCache.filter(r => r.status === STATUS.PENDING_FINANCE && (!deptFilter || r.department === deptFilter) && verifyFilterMatch(r, verFilter) && bcFilterMatch(r, bcFilter) && matchesKeyword(r, finKw))
     .sort((a, b) => (Number(!!b.isUrgent) - Number(!!a.isUrgent)) || (a.approvalDate || '').localeCompare(b.approvalDate || ''));
-  const history = allItemsCache.filter(r => (r.status === STATUS.PROCESSED || r.status === STATUS.REJECTED_FINANCE) && (!deptFilter || r.department === deptFilter) && verifyFilterMatch(r, verFilter) && matchesKeyword(r, finKw))
+  const history = allItemsCache.filter(r => (r.status === STATUS.PROCESSED || r.status === STATUS.REJECTED_FINANCE) && (!deptFilter || r.department === deptFilter) && verifyFilterMatch(r, verFilter) && bcFilterMatch(r, bcFilter) && matchesKeyword(r, finKw))
     .sort((a, b) => (b.financeDecisionDate || '').localeCompare(a.financeDecisionDate || ''));
   renderCurrencyTotals('finance-totals', pending);
   // The tab badge ignores the keyword search (same as the Approvals badge), so typing doesn't change it.
@@ -2884,13 +2951,13 @@ function renderFinanceTable(){
   document.getElementById('finance-table-body').innerHTML = pending.length ? pending.map(r =>
     '<tr' + urgentRowAttr(r) + ' onclick="openDetail(\'' + r.id + '\',\'finance\')"><td>' + escapeHtml(r.invoiceNumber || '—') + urgentTag(r) + '</td><td>' + escapeHtml(r.department) +
     '</td><td>' + escapeHtml(r.requestorName) + '</td><td>' + escapeHtml(r.vendorName) + '</td><td>' + fmtAmount(r.amount, r.currency) +
-    '</td><td>' + verifyCell(r) + '</td><td>' + escapeHtml(r.approverEmail) + '</td></tr>'
-  ).join('') : '<tr class="empty-row"><td colspan="7">No requests awaiting Finance review.</td></tr>';
+    '</td><td>' + verifyCell(r) + '</td><td>' + escapeHtml(r.approverEmail) + '</td><td>' + bcCheckboxHtml(r) + '</td></tr>'
+  ).join('') : '<tr class="empty-row"><td colspan="8">No requests awaiting Finance review.</td></tr>';
   document.getElementById('finance-history-body').innerHTML = history.length ? history.slice(0, 100).map(r =>
     '<tr' + urgentRowAttr(r) + ' onclick="openDetail(\'' + r.id + '\',\'mine\')"><td>' + escapeHtml(r.invoiceNumber || '—') + urgentTag(r) + '</td><td>' + escapeHtml(r.department) +
     '</td><td>' + escapeHtml(r.vendorName) + '</td><td>' + fmtAmount(r.amount, r.currency) + '</td><td>' + statusPill(r.status) +
-    '</td><td>' + verifyCell(r) + '</td><td>' + fmtDateTime(r.financeDecisionDate) + '</td><td>' + escapeHtml(r.paymentReference || '—') + '</td></tr>'
-  ).join('') : '<tr class="empty-row"><td colspan="8">No history yet.</td></tr>';
+    '</td><td>' + verifyCell(r) + '</td><td>' + fmtDateTime(r.financeDecisionDate) + '</td><td>' + escapeHtml(r.paymentReference || '—') + '</td><td>' + bcCheckboxHtml(r) + '</td></tr>'
+  ).join('') : '<tr class="empty-row"><td colspan="9">No history yet.</td></tr>';
 }
 
 /* ---- Analytics ---- */
@@ -3485,6 +3552,9 @@ function baseDetailGrid(record){
         ? '<div class="full" style="padding:10px 12px; border-radius:8px; background:var(--bad-bg); color:var(--bad);"><div class="k" style="color:var(--bad);">Verification notes</div><div style="white-space:pre-wrap;">' +
             (record.verificationNotes ? escapeHtml(record.verificationNotes) : 'No notes provided.') + '</div></div>'
         : (record.verificationNotes ? '<div class="full"><div class="k">Verification notes</div><div style="white-space:pre-wrap;">' + escapeHtml(record.verificationNotes) + '</div></div>' : '')) +
+      (isFinanceUser() && record.status !== STATUS.DRAFT
+        ? '<div><div class="k">Recorded in BC <span class="muted small">(Finance only)</span></div>' + bcCheckboxHtml(record, true) + '</div>'
+        : '') +
       '<div><div class="k">Requestor</div>' + escapeHtml(record.requestorName) + ' &lt;' + escapeHtml(record.requestorEmail) + '&gt;</div>' +
       '<div><div class="k">Submitted</div>' + fmtDateTime(record.submittedDate) + '</div>' +
       '<div><div class="k">Vendor</div>' + escapeHtml(record.vendorName) + '</div>' +
