@@ -664,17 +664,12 @@
           <select class="filter-select" id="finance-verify-filter" onchange="renderFinanceTable()">
             <option value="">All verification statuses</option>
           </select>
-          <select class="filter-select" id="finance-bc-filter" onchange="renderFinanceTable()">
-            <option value="">BC: all</option>
-            <option value="no">Not yet recorded in BC</option>
-            <option value="yes">Recorded in BC</option>
-          </select>
           <button type="button" class="btn btn-ghost" onclick="refreshAll()">Refresh</button>
         </div>
       </div>
       <div class="currency-totals" id="finance-totals"></div>
       <table class="data-table">
-        <thead><tr><th>Document Number</th><th>Department</th><th>Requestor</th><th>Vendor</th><th>Amount</th><th>Verification</th><th>Approved by</th><th>Recorded in BC</th></tr></thead>
+        <thead><tr><th>Document Number</th><th>Department</th><th>Requestor</th><th>Vendor</th><th>Amount</th><th>Verification</th><th>Approved by</th></tr></thead>
         <tbody id="finance-table-body"></tbody>
       </table>
     </div>
@@ -682,6 +677,11 @@
       <div class="toolbar-row">
         <h2 style="margin:0;">Finance History</h2>
         <div class="filters">
+          <select class="filter-select" id="finance-bc-filter" onchange="renderFinanceTable()">
+            <option value="">BC: all</option>
+            <option value="no">Not yet recorded in BC</option>
+            <option value="yes">Recorded in BC</option>
+          </select>
           <select class="filter-select" id="finance-hist-entity" onchange="renderFinanceTable()" title="Payment entity">
             <option value="">All entities</option>
             <option value="SG">SG Payment</option>
@@ -835,6 +835,22 @@
         <button type="button" class="btn btn-ghost" id="migrate-diag-btn" onclick="diagnoseMigration()">Check first file</button>
       </div>
       <pre id="migrate-log" class="small" style="white-space:pre-wrap; margin:12px 0 0; color:var(--sub);"></pre>
+    </div>
+    <div class="card" id="admin-ops-backfill-card">
+      <div class="card-head">
+        <div>
+          <h2>Backfill Operations Approvals → Checked</h2>
+          <div class="muted small">One-off tool. New Operations approvals already set Verification to <strong>Checked</strong> and add "All documents checked by approver …" to the verification notes. This applies the same to Operations requests approved <strong>before</strong> that change (status Approved – Pending Finance, Pending – More Info Needed or Processed). Existing verification notes are kept; the line is added underneath using the original approver and approval date. Requests that already have the line are skipped, so it is safe to run again. Run <strong>Scan</strong> first &mdash; nothing changes until you click Apply.</div>
+        </div>
+      </div>
+      <label class="small" style="display:flex; gap:8px; align-items:center; margin:0 0 10px;">
+        <input type="checkbox" id="ops-backfill-include-checked" checked onchange="scanOpsBackfill()"> Also add the note to requests already marked Checked (status is left as Checked)
+      </label>
+      <div class="btn-row" style="justify-content:flex-start;">
+        <button type="button" class="btn btn-ghost" id="ops-backfill-scan-btn" onclick="scanOpsBackfill()">Scan</button>
+        <button type="button" class="btn btn-primary" id="ops-backfill-run-btn" onclick="runOpsBackfill()" disabled>Apply</button>
+      </div>
+      <pre id="ops-backfill-log" class="small" style="white-space:pre-wrap; margin:12px 0 0; color:var(--sub);"></pre>
     </div>
     <div class="card">
       <div class="card-head">
@@ -2025,8 +2041,8 @@ async function handleMarkChecked(itemId){
    Business Central. Doesn't change the request's status or notify anyone;
    each tick / untick is written to the History log. */
 function canTickBC(record){
-  return isFinanceUser() && record && record.status !== STATUS.DRAFT &&
-    record.status !== STATUS.REJECTED_APPROVER && record.status !== STATUS.REJECTED_FINANCE;
+  // Only processed requests (they appear in Finance History) can be recorded in BC.
+  return isFinanceUser() && record && record.status === STATUS.PROCESSED;
 }
 function bcFilterMatch(r, val){
   if (!val) return true;
@@ -3154,7 +3170,7 @@ function renderFinanceTable(){
   syncVerifyFilter('finance-verify-filter');
   const verFilter = document.getElementById('finance-verify-filter').value;
   const bcFilter = (document.getElementById('finance-bc-filter') || {}).value || '';
-  const pending = allItemsCache.filter(r => r.status === STATUS.PENDING_FINANCE && (!deptFilter || r.department === deptFilter) && verifyFilterMatch(r, verFilter) && bcFilterMatch(r, bcFilter) && matchesKeyword(r, finKw))
+  const pending = allItemsCache.filter(r => r.status === STATUS.PENDING_FINANCE && (!deptFilter || r.department === deptFilter) && verifyFilterMatch(r, verFilter) && matchesKeyword(r, finKw))
     .sort((a, b) => (Number(!!b.isUrgent) - Number(!!a.isUrgent)) || (a.approvalDate || '').localeCompare(b.approvalDate || ''));
   const histEntity = kwValue('finance-hist-entity');
   const histFrom = kwValue('finance-hist-from');
@@ -3180,8 +3196,8 @@ function renderFinanceTable(){
   document.getElementById('finance-table-body').innerHTML = pending.length ? pending.map(r =>
     '<tr' + urgentRowAttr(r) + ' onclick="openDetail(\'' + r.id + '\',\'finance\')"><td>' + escapeHtml(r.invoiceNumber || '—') + urgentTag(r) + '</td><td>' + escapeHtml(r.department) +
     '</td><td>' + escapeHtml(r.requestorName) + '</td><td>' + escapeHtml(r.vendorName) + '</td><td>' + fmtAmount(r.amount, r.currency) +
-    '</td><td>' + verifyCell(r) + '</td><td>' + escapeHtml(r.approverEmail) + '</td><td>' + bcCheckboxHtml(r) + '</td></tr>'
-  ).join('') : '<tr class="empty-row"><td colspan="8">No requests awaiting Finance review.</td></tr>';
+    '</td><td>' + verifyCell(r) + '</td><td>' + escapeHtml(r.approverEmail) + '</td></tr>'
+  ).join('') : '<tr class="empty-row"><td colspan="7">No requests awaiting Finance review.</td></tr>';
   syncBCSelectAll();
   document.getElementById('finance-history-body').innerHTML = shownHistory.length ? shownHistory.map(r =>
     '<tr' + urgentRowAttr(r) + ' onclick="openDetail(\'' + r.id + '\',\'mine\')"><td>' + escapeHtml(r.invoiceNumber || '—') + urgentTag(r) + '</td><td>' + escapeHtml(r.department) +
@@ -3782,7 +3798,7 @@ function baseDetailGrid(record){
         ? '<div class="full" style="padding:10px 12px; border-radius:8px; background:var(--bad-bg); color:var(--bad);"><div class="k" style="color:var(--bad);">Verification notes</div><div style="white-space:pre-wrap;">' +
             (record.verificationNotes ? escapeHtml(record.verificationNotes) : 'No notes provided.') + '</div></div>'
         : (record.verificationNotes ? '<div class="full"><div class="k">Verification notes</div><div style="white-space:pre-wrap;">' + escapeHtml(record.verificationNotes) + '</div></div>' : '')) +
-      (isFinanceUser() && record.status !== STATUS.DRAFT
+      (isFinanceUser() && record.status === STATUS.PROCESSED
         ? '<div><div class="k">Recorded in BC <span class="muted small">(Finance only)</span></div>' + bcCheckboxHtml(record, true) + '</div>'
         : '') +
       '<div><div class="k">Requestor</div>' + escapeHtml(record.requestorName) + ' &lt;' + escapeHtml(record.requestorEmail) + '&gt;</div>' +
@@ -4408,6 +4424,80 @@ function handleRejectClick(){
 }
 /* Department whose approval also marks the request's Verification as Checked — see handleApprovalDecision(). */
 const OPS_DEPT_AUTO_CHECK = 'Operations';
+const OPS_CHECK_NOTE_PREFIX = 'All documents checked by approver ';
+/* Verification fields for an Operations approval: status Checked, earlier notes kept, one line appended.
+   setDate=false leaves VerificationDate alone (used by the backfill when the status was already Checked). */
+function opsCheckedVerificationPatch(record, approverEmail, approvalIso, setDate){
+  const prevStatus = String(record.verificationStatus || '').trim();
+  const note = OPS_CHECK_NOTE_PREFIX + (approverEmail || 'the approver') + ' on ' + fmtDateTime(approvalIso) +
+    (prevStatus && prevStatus.toLowerCase() !== 'checked' ? ' (was: ' + prevStatus + ').' : '.');
+  const p = {
+    _allowVerificationWrite: true,
+    verificationStatus: 'Checked',
+    verificationNotes: record.verificationNotes ? record.verificationNotes + '\n' + note : note
+  };
+  if (setDate) p.verificationDate = approvalIso || nowIso();
+  return p;
+}
+
+/* ---- One-off backfill (User Management tab): apply the Operations rule to past approvals ---- */
+let opsBackfillPlan = [];
+function opsBackfillLog(t){ document.getElementById('ops-backfill-log').textContent = t; }
+async function scanOpsBackfill(){
+  if (!isAdminUser()) return;
+  const btn = document.getElementById('ops-backfill-run-btn');
+  btn.disabled = true;
+  opsBackfillLog('Scanning…');
+  try {
+    await refreshAll();
+    const includeChecked = document.getElementById('ops-backfill-include-checked').checked;
+    const eligibleStatus = [STATUS.PENDING_FINANCE, STATUS.PENDING_INFO, STATUS.PROCESSED];
+    opsBackfillPlan = allItemsCache.filter(r =>
+      r.department === OPS_DEPT_AUTO_CHECK &&
+      r.approvalDecision === 'Approved' &&
+      eligibleStatus.includes(r.status) &&
+      String(r.verificationNotes || '').indexOf(OPS_CHECK_NOTE_PREFIX) === -1 &&
+      (includeChecked || String(r.verificationStatus || '').trim().toLowerCase() !== 'checked'))
+      .sort((a, b) => (a.approvalDate || '').localeCompare(b.approvalDate || ''));
+    const notChecked = opsBackfillPlan.filter(r => String(r.verificationStatus || '').trim().toLowerCase() !== 'checked');
+    if (!opsBackfillPlan.length) { opsBackfillLog('Nothing to update — every approved Operations request already has the note.'); return; }
+    opsBackfillLog(opsBackfillPlan.length + ' request(s) will be updated:\n' +
+      '  • ' + notChecked.length + ' will change to Checked and get the note\n' +
+      '  • ' + (opsBackfillPlan.length - notChecked.length) + ' already Checked — note added only\n\n' +
+      opsBackfillPlan.map(r => r.requestId + '  ' + r.status + '  |  ' + (String(r.verificationStatus || '').trim() || 'Not checked yet') +
+        ' → Checked  |  approved by ' + (r.approverEmail || '?') + ' on ' + fmtDateTime(r.approvalDate)).join('\n') +
+      '\n\nClick Apply to update these in SharePoint.');
+    btn.disabled = false;
+  } catch (e) { opsBackfillLog('Scan failed: ' + e.message); }
+}
+async function runOpsBackfill(){
+  if (!isAdminUser() || !opsBackfillPlan.length) return;
+  if (!confirm('Update ' + opsBackfillPlan.length + ' Operations request(s) to Verification = Checked and add the approver note?')) return;
+  const btn = document.getElementById('ops-backfill-run-btn');
+  btn.disabled = true;
+  const queue = opsBackfillPlan.slice();
+  let ok = 0, failed = 0; const errors = [];
+  async function worker(){
+    while (queue.length) {
+      const r = queue.shift();
+      try {
+        const prev = String(r.verificationStatus || '').trim();
+        const wasChecked = prev.toLowerCase() === 'checked';
+        const patch = opsCheckedVerificationPatch(r, r.approverEmail, r.approvalDate, !wasChecked);
+        patch.historyLog = appendHistory(r.historyLog, currentAccount.username + ' (admin) applied the Operations approval rule to this past request: verification ' +
+          (wasChecked ? 'note added (already Checked).' : 'set to Checked' + (prev ? ' (was ' + prev + ')' : '') + '.'));
+        await updateRequestItem(r.id, patch);
+        ok++;
+      } catch (e) { failed++; errors.push(r.requestId + ': ' + e.message); }
+      opsBackfillLog('Updating… ' + (ok + failed) + ' / ' + opsBackfillPlan.length);
+    }
+  }
+  await Promise.all([worker(), worker(), worker(), worker()]);
+  opsBackfillPlan = [];
+  opsBackfillLog('Done. ' + ok + ' updated' + (failed ? ', ' + failed + ' failed:\n' + errors.join('\n') : '.'));
+  showToast('Backfill finished: ' + ok + ' updated' + (failed ? ', ' + failed + ' failed.' : '.'), failed ? 'error' : 'success');
+  await refreshAll();
+}
 async function handleApprovalDecision(decision){
   const record = modalContext.record;
   const comment = (document.getElementById('decision-comment').value || '').trim();
@@ -4442,14 +4532,7 @@ async function handleApprovalDecision(decision){
          Verification to Checked. Earlier verification notes are kept; a line is appended. */
       if (decision === 'approve' && record.department === OPS_DEPT_AUTO_CHECK) {
         const prevStatus = String(record.verificationStatus || '').trim();
-        const note = 'All documents checked by approver ' + currentAccount.username + ' on ' + fmtDateTime(patch.approvalDate) +
-          (prevStatus && prevStatus.toLowerCase() !== 'checked' ? ' (was: ' + prevStatus + ').' : '.');
-        Object.assign(patch, {
-          _allowVerificationWrite: true,
-          verificationStatus: 'Checked',
-          verificationDate: patch.approvalDate,
-          verificationNotes: record.verificationNotes ? record.verificationNotes + '\n' + note : note
-        });
+        Object.assign(patch, opsCheckedVerificationPatch(record, currentAccount.username, patch.approvalDate, true));
         patch.historyLog = appendHistory(patch.historyLog, 'Verification set to Checked on approval (' + OPS_DEPT_AUTO_CHECK + ')' + (prevStatus ? ', was ' + prevStatus : '') + '.');
       }
     }
