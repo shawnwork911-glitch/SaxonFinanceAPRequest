@@ -540,6 +540,16 @@ th,thead th{font-weight:700;}
 td{font-weight:500;}
 h1,h2,h3{font-weight:700;}
 button.secondary,.btn,.tab-btn,.main-tab-btn,.subtab-btn,.task-subtab-btn,.rqa-subtab-btn{font-weight:600;}
+
+/* ---- Hide / show side menu (per-viewer preference) ---- */
+#desk-nav-toggle{
+  flex:none;width:36px;height:36px;padding:0;margin:0;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;
+  font-size:17px;line-height:1;cursor:pointer;background:transparent;color:inherit;border:1px solid transparent;box-shadow:none;
+}
+#desk-nav-toggle:hover{background:rgba(127,127,127,.12);border-color:rgba(127,127,127,.25);}
+#tabs{transition:transform .2s ease;}
+html.desk-nav-hidden{--side-w:0px;}
+html.desk-nav-hidden #tabs{transform:translateX(-100%);visibility:hidden;}
 </style>
 </head>
 <body>
@@ -557,6 +567,7 @@ button.secondary,.btn,.tab-btn,.main-tab-btn,.subtab-btn,.task-subtab-btn,.rqa-s
 
 <div id="top-bar">
   <div class="brand">
+    <button type="button" id="desk-nav-toggle" title="Hide menu" aria-label="Hide menu" aria-expanded="true">&#9776;</button>
     <img class="logo-img" alt="Saxon Renewables logo" src="assets/logo.png">
     <span class="brand-text">AP Request System<small>Saxon Renewables — Accounts Payable</small></span>
   </div>
@@ -5028,6 +5039,26 @@ initTheme();
     currentAccount = accounts[0];
     await showSignedInUI();
   }
+})();
+</script>
+<script>
+/* Desk: hide / show the side menu (visual only; remembered per browser) */
+(function(){
+  var btn=document.getElementById('desk-nav-toggle'), root=document.documentElement, KEY='desk-nav-hidden';
+  if(!btn) return;
+  function apply(h){
+    root.classList.toggle('desk-nav-hidden',h);
+    btn.title = h ? 'Show menu' : 'Hide menu';
+    btn.setAttribute('aria-label', btn.title);
+    btn.setAttribute('aria-expanded', h ? 'false' : 'true');
+  }
+  var saved=false; try{ saved = localStorage.getItem(KEY)==='1'; }catch(e){}
+  apply(saved);
+  btn.addEventListener('click',function(e){
+    e.stopPropagation();
+    var h=!root.classList.contains('desk-nav-hidden'); apply(h);
+    try{ localStorage.setItem(KEY, h?'1':'0'); }catch(e){}
+  });
 })();
 </script>
 </body>
