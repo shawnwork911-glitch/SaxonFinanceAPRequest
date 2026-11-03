@@ -577,11 +577,66 @@ html.desk-nav-hidden #tabs{transform:translateX(-100%);visibility:hidden;}
   .bc-note { margin-top:10px; padding:8px 12px; border-radius:8px; font-size:12.5px; background: var(--accent-light); color: var(--sub); }
   .bc-note.warn { background: var(--warn-bg); color: var(--warn); }
   .bc-note.bad { background: var(--bad-bg); color: var(--bad); }
+  .bc-note.ok { background: var(--good-bg); color: var(--good); }
+  /* ---- Top bar: avatar menu + notification bell (matches the other Saxon apps) ---- */
+  #user-box { gap: 10px; }
+  .pop-wrap { position: relative; }
+  .icon-btn, #theme-toggle-btn.icon-btn {
+    width: 38px; height: 38px; padding: 0; border-radius: 10px; display: inline-flex; align-items: center; justify-content: center;
+    font-size: 17px; line-height: 1; cursor: pointer; background: var(--surface-2, var(--paper)); border: 1px solid var(--line); color: var(--ink); position: relative;
+  }
+  .icon-btn:hover, #theme-toggle-btn.icon-btn:hover { border-color: var(--accent); }
+  .avatar-btn {
+    width: 38px; height: 38px; border-radius: 50%; border: none; cursor: pointer; padding: 0;
+    background: var(--accent); color: #fff; font-family: inherit; font-weight: 700; font-size: 16px;
+  }
+  .avatar-btn:hover { filter: brightness(1.08); }
+  .notif-count {
+    position: absolute; top: -5px; right: -5px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
+    background: var(--bad); color: #fff; font-size: 10.5px; font-weight: 700; line-height: 18px; text-align: center;
+  }
+  .notif-count[hidden] { display: none; }
+  .pop-panel {
+    position: absolute; top: calc(100% + 10px); right: 0; z-index: 260; background: var(--panel); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 12px 32px rgba(0,0,0,.22); padding: 14px;
+  }
+  .pop-panel[hidden] { display: none; }
+  .user-menu { width: 340px; max-width: calc(100vw - 24px); display: flex; flex-direction: column; gap: 8px; }
+  .um-who { padding: 2px 6px 8px; font-size: 13px; }
+  .um-who .email { font-weight: 700; font-size: 14px; word-break: break-all; }
+  .user-menu .role-badges, #user-box .user-menu .role-badges { display: block !important; justify-content: flex-start; color: var(--sub); font-size: 12.5px; margin-top: 2px; }
+  #app-links { display: flex; flex-direction: column; gap: 8px; }
+  .um-item {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; text-align: left;
+    padding: 11px 14px; border: 1px solid var(--line); border-radius: 10px; background: transparent; color: var(--ink);
+    font-family: inherit; font-size: 14px; font-weight: 600; text-decoration: none; cursor: pointer;
+  }
+  a.um-item:hover, button.um-item:hover { border-color: var(--accent); background: var(--glow, var(--accent-light)); }
+  .um-current { cursor: default; border-style: dashed; color: var(--sub); }
+  .um-here { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--accent); }
+  .um-arrow { color: var(--sub); flex: none; }
+  #signout-btn.um-item { font-size: 14px; padding: 11px 14px; border-radius: 10px; background: transparent; }
+  .notif-panel { width: 380px; max-width: calc(100vw - 24px); padding: 10px; }
+  .np-head { display: flex; align-items: center; justify-content: space-between; padding: 4px 6px 8px; font-size: 14px; }
+  .np-markall { background: none; border: none; color: var(--accent); font-family: inherit; font-size: 12px; font-weight: 600; cursor: pointer; padding: 2px 4px; }
+  #notif-list { max-height: 420px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
+  .np-item {
+    display: flex; flex-direction: column; gap: 2px; width: 100%; text-align: left; padding: 9px 10px 9px 14px; border: none; border-radius: 8px;
+    background: transparent; color: var(--ink); font-family: inherit; cursor: pointer; position: relative;
+  }
+  .np-item:hover { background: var(--surface-2, var(--paper)); }
+  .np-item.unread { background: var(--glow, var(--accent-light)); }
+  .np-item.unread::before { content: ''; position: absolute; left: 4px; top: 15px; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+  .np-item.action .np-text { font-weight: 700; }
+  .np-text { font-size: 13px; font-weight: 600; }
+  .np-sub { font-size: 11.5px; color: var(--sub); }
+  .np-empty { padding: 18px 10px; text-align: center; color: var(--sub); font-size: 13px; }
+  @media print { .pop-wrap { display: none !important; } }
 </style>
 </head>
 <body>
 
-<button type="button" id="theme-toggle-btn" class="theme-toggle-floating" title="Toggle dark / light mode">Dark mode</button>
+<button type="button" id="theme-toggle-btn" class="theme-toggle-floating icon-btn" title="Toggle dark / light mode">&#127769;</button>
 
 <div id="login-overlay">
   <div id="login-card">
@@ -599,11 +654,25 @@ html.desk-nav-hidden #tabs{transform:translateX(-100%);visibility:hidden;}
     <span class="brand-text">AP Request System<small>Saxon Renewables — Accounts Payable</small></span>
   </div>
   <div id="user-box">
-    <div class="who">
-      <div class="email" id="user-email-label"></div>
-      <div class="role-badges" id="role-badges"></div>
+    <div class="pop-wrap">
+      <button type="button" id="avatar-btn" class="avatar-btn" title="Account and apps" aria-haspopup="true" aria-expanded="false" onclick="togglePop('user-menu', event)">?</button>
+      <div id="user-menu" class="pop-panel user-menu" hidden>
+        <div class="um-who">
+          <div class="muted">Signed in as</div>
+          <div class="email" id="user-email-label"></div>
+          <div class="role-badges" id="role-badges"></div>
+        </div>
+        <div id="app-links"></div>
+        <button type="button" id="signout-btn" class="um-item">Sign out</button>
+      </div>
     </div>
-    <button type="button" id="signout-btn">Sign out</button>
+    <div class="pop-wrap">
+      <button type="button" id="notif-btn" class="icon-btn" title="Notifications" aria-haspopup="true" aria-expanded="false" onclick="togglePop('notif-panel', event)">&#128276;<span id="notif-count" class="notif-count" hidden></span></button>
+      <div id="notif-panel" class="pop-panel notif-panel" hidden>
+        <div class="np-head"><strong>Notifications</strong><button type="button" class="np-markall" onclick="markAllNotificationsRead()">Mark all as read</button></div>
+        <div id="notif-list"></div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -2774,7 +2843,8 @@ function setupRoleUI(){
   depts.forEach(d => badges.push('Approver · ' + d));
   if (isFinanceUser()) badges.push('Finance');
   if (isAdminUser()) badges.push('Super Admin');
-  badgesEl.innerHTML = badges.map(b => '<span class="role-badge">' + escapeHtml(b) + '</span>').join('');
+  // Shown in the account menu as "· Super Admin", most senior role first (like the other Saxon apps).
+  badgesEl.textContent = '\u00B7 ' + badges.slice().reverse().join(' \u00B7 ');
   document.getElementById('tab-approvals').style.display = depts.length ? '' : 'none';
   document.getElementById('tab-finance').style.display = isFinanceUser() ? '' : 'none';
   document.getElementById('tab-admin').style.display = isAdminUser() ? '' : 'none';
@@ -3566,6 +3636,7 @@ async function refreshAll(){
   try {
     allItemsCache = await fetchAllItems();
     renderMineTable(); renderApprovalsTable(); renderFinanceTable(); renderAnalyticsAll();
+    renderNotifications();
   } catch (e) { showToast('Could not load requests: ' + e.message, 'error'); }
   document.getElementById('app-loading').style.display = 'none';
 }
@@ -4748,12 +4819,14 @@ async function showSignedInUI(){
   document.getElementById('top-bar').style.display = 'flex';
   document.getElementById('tabs').style.display = 'flex';
   document.getElementById('user-email-label').textContent = currentAccount.username;
+  document.getElementById('avatar-btn').textContent = ((currentAccount.name || currentAccount.username || '?').trim()[0] || '?').toUpperCase();
+  renderAppLinks();
   // Move the theme toggle out of its floating login-screen position and into the top bar,
   // next to Sign out, so it stops overlapping other controls once signed in.
   const themeBtn = document.getElementById('theme-toggle-btn');
   if (themeBtn && themeBtn.classList.contains('theme-toggle-floating')) {
     themeBtn.classList.remove('theme-toggle-floating');
-    document.getElementById('user-box').insertBefore(themeBtn, document.getElementById('signout-btn'));
+    document.getElementById('user-box').appendChild(themeBtn);
   }
   document.getElementById('app-loading').style.display = 'block';
   try {
@@ -4798,7 +4871,10 @@ document.getElementById('signout-btn').addEventListener('click', async () => {
 function applyTheme(theme){
   document.documentElement.setAttribute('data-theme', theme);
   const btn = document.getElementById('theme-toggle-btn');
-  if (btn) btn.textContent = theme === 'dark' ? 'Light mode' : 'Dark mode';
+  if (btn) {
+    btn.textContent = theme === 'dark' ? '\u2600\uFE0F' : '\uD83C\uDF19';   // sun in dark mode, moon in light mode
+    btn.title = theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode';
+  }
   try { localStorage.setItem('ap-theme', theme); } catch (e) { /* private browsing, etc — theme just won't persist */ }
 }
 function initTheme(){
@@ -4826,8 +4902,9 @@ initTheme();
           -> Finance clicks "Mark as processed / paid": the posting details (Posting Date =
              Document Date, Document Date, Due Date, Payment Terms, Vendor Invoice No.) are
              saved on the PO in BC, NOT posted (= draft)
-          -> Finance reviews and clicks "Post in BC" (Receive + Invoice). "Recorded in BC"
-             is then ticked automatically.
+          -> Finance posts the PO(s) manually in BC, then ticks "Recorded in BC" here
+             (which hides the Business Central section on that request).
+   Several PO / MPO numbers on one request are each checked and drafted separately.
    Setup:
    1. Azure portal > App registrations > "Finance AP Request" > API permissions > Add >
       Dynamics 365 Business Central > Delegated > Financials.ReadWrite.All > Grant admin consent.
@@ -4865,11 +4942,13 @@ const PO_NO_PATTERN = /(?:^|[^A-Z0-9])([SM]PO-\d{4}-\d{4})(?![0-9])/gi;
 /* Older-style numbers: 8 digits straight after "Purchase Order", e.g. "Purchase Order - 26080061".
    Only taken after those words, so dates and invoice numbers elsewhere in a name are ignored. */
 const PO_NO_PATTERN_8 = /Purchase[\s_-]*Order[\s_\-\u2013\u2014:#.]*(?:No\.?[\s_\-:#]*)?(\d{8})(?![0-9])/gi;
+/* ...and "PO_26070060" / "PO 26070060" / "PO-26070060" (the word PO on its own, then 8 digits). */
+const PO_NO_PATTERN_PO8 = /(?:^|[^A-Z0-9])PO[\s_\-:#.]*(\d{8})(?![0-9])/gi;
 function bcGuessPoNumbers(record){
   const found = [];
   const texts = parseDocLinks(record.documentLinks).map(d => String(d.name || '')).concat([String(record.description || '')]);
   texts.forEach(t => {
-    for (const re of [PO_NO_PATTERN, PO_NO_PATTERN_8]) {
+    for (const re of [PO_NO_PATTERN, PO_NO_PATTERN_8, PO_NO_PATTERN_PO8]) {
       for (const m of t.matchAll(re)) {
         const no = m[1].toUpperCase();
         if (!found.includes(no)) found.push(no);
@@ -4973,8 +5052,13 @@ function bcDefaultDraft(record, i){
 async function bcCheck(record, inputs){
   const results = [];
   let openTotal = 0;
+  const progressBox = document.getElementById('bc-results');
   for (let i = 0; i < inputs.poNumbers.length; i++) {
     const poNo = inputs.poNumbers[i];
+    if (progressBox && inputs.poNumbers.length > 1) {
+      const pEl = progressBox.querySelector('.bc-progress') || progressBox.insertAdjacentElement('afterbegin', Object.assign(document.createElement('div'), { className: 'muted small bc-progress' }));
+      pEl.textContent = 'Checking ' + poNo + ' in Business Central (' + (i + 1) + ' of ' + inputs.poNumbers.length + ')\u2026';
+    }
     const r = { poNo, checks: [], blocking: false, draft: inputs.drafts[poNo] || bcDefaultDraft(record, i) };
     const add = (level, text) => { r.checks.push({ level, text }); if (level === 'bad') r.blocking = true; };
     results.push(r);
@@ -5041,10 +5125,11 @@ async function bcCheck(record, inputs){
   if (results.length && results.every(r => r.po)) {
     const reqAmt = Number(record.amount) || 0;
     if (Math.abs(openTotal - reqAmt) > BC_CONFIG.amountTolerance) {
-      out.amountNote = 'Amount: the request is ' + fmtAmount(reqAmt, record.currency) + ', but the not-yet-invoiced amount on the PO(s) is ' +
-        fmtAmount(openTotal, record.currency) + '. Posting from here invoices everything still open, so for a partial invoice set Qty. to Invoice in BC and post there.';
+      out.amountNote = 'Amount: the request is ' + fmtAmount(reqAmt, record.currency) + ', but the not-yet-invoiced amount on the ' +
+        results.length + ' PO(s) found is ' + fmtAmount(openTotal, record.currency) + '. Check that every PO / MPO is listed above, ' +
+        'or that this is a partial invoice (set Qty. to Invoice in BC when you post).';
     } else {
-      results[0].checks.push({ level: 'ok', text: 'Amount matches the request: ' + fmtAmount(reqAmt, record.currency) });
+      out.amountOk = 'Total not yet invoiced on ' + (results.length > 1 ? 'all ' + results.length + ' POs' : 'the PO') + ' matches the request: ' + fmtAmount(reqAmt, record.currency);
     }
   }
   out.blocking = results.some(r => r.blocking);
@@ -5088,81 +5173,48 @@ async function bcRecordStatus(record, status, notes, historyLine, extra){
   Object.assign(record, patch);
 }
 
-/* Check, then save the draft on every PO. Returns a short message for a toast. */
+/* Check every PO / MPO, then save the draft on each one that has no blocking issues.
+   POs with issues are skipped (and listed) so the others are still saved. Nothing is posted. */
 async function bcSaveDraft(record, inputs, auto){
   const chk = await bcCheck(record, inputs);
   bcRenderResults(chk);
   const poNumbers = inputs.poNumbers.join(', ');
   const who = currentAccount.username + (auto ? ' (auto, on processing)' : '');
-  if (chk.blocking) {
-    const issues = chk.results.map(r => r.checks.filter(c => c.level === 'bad').map(c => r.poNo + ': ' + c.text).join('\n')).filter(Boolean).join('\n');
-    await bcRecordStatus(record, BC_STATUS.ISSUES, issues, who + ': BC check found issues — draft not saved.', { poNumbers });
-    return 'BC draft not saved — the BC check found issues (see the Business Central section).';
-  }
-  const done = [];
+  const saved = [], failed = [];
   for (const r of chk.results) {
-    try { await bcWriteDraft(r); done.push(r); }
-    catch (e) {
-      const note = done.map(bcDraftSummary).concat([r.poNo + ': ' + e.message]).join('\n');
-      await bcRecordStatus(record, BC_STATUS.ISSUES, note, who + ': could not save BC draft on ' + r.poNo + ' — ' + e.message, { poNumbers });
-      return 'BC draft not saved on ' + r.poNo + ': ' + e.message;
-    }
+    if (r.blocking) { failed.push(r.poNo + ': ' + r.checks.filter(c => c.level === 'bad').map(c => c.text).join(' ')); continue; }
+    try { await bcWriteDraft(r); saved.push(r); }
+    catch (e) { failed.push(r.poNo + ': ' + e.message); }
   }
-  const notes = done.map(bcDraftSummary).join('\n') + (bcHasExtension() ? '' : '\nVendor Invoice No., Document Date and Due Date still to be entered in BC (AP Portal extension not installed).');
-  await bcRecordStatus(record, BC_STATUS.DRAFT, notes, who + ' saved posting details on ' + poNumbers + ' in BC (draft, not posted).', { poNumbers });
+  const extNote = bcHasExtension() ? '' : '\nVendor Invoice No., Document Date and Due Date still to be entered in BC (AP Portal extension not installed).';
+  const notes = (saved.length ? 'Draft saved:\n' + saved.map(bcDraftSummary).join('\n') : '') +
+    (failed.length ? (saved.length ? '\n' : '') + 'Not saved:\n' + failed.join('\n') : '') + (saved.length ? extNote : '');
+  const status = failed.length ? BC_STATUS.ISSUES : BC_STATUS.DRAFT;
+  const hist = saved.length
+    ? who + ' saved posting details in BC (draft, not posted) on ' + saved.map(r => r.poNo).join(', ') + (failed.length ? '; not saved on ' + failed.length + ' PO(s) with issues.' : '.')
+    : who + ': BC draft not saved — the check found issues on ' + failed.length + ' PO(s).';
+  await bcRecordStatus(record, status, notes, hist, { poNumbers });
+  const total = chk.results.length;
+  if (!saved.length) return 'BC draft not saved — the BC check found issues (see the Business Central section).';
+  if (failed.length) return 'BC draft saved on ' + saved.length + ' of ' + total + ' PO(s); ' + failed.length + ' not saved because of issues (see the Business Central section).';
   return bcHasExtension()
-    ? 'Posting details saved on ' + poNumbers + ' in BC as a draft — review and click Post in BC.'
-    : 'Posting Date and Payment Terms saved on ' + poNumbers + ' in BC. Enter Vendor Invoice No., Document Date and Due Date in BC before posting.';
-}
-
-/* Receive + invoice every PO in BC (the same action as the BC Portal's Receive / Invoice buttons, in one go). */
-async function bcPost(record, inputs, btn){
-  const chk = await bcCheck(record, inputs);
-  bcRenderResults(chk);
-  if (chk.blocking) throw new Error('fix the issues shown in the Business Central section first');
-  if (chk.amountNote) throw new Error('the request amount doesn\'t match what is still open on the PO(s) — post this one from BC');
-  const list = chk.results.map(r => r.poNo + ' — ' + fmtAmount(r.openValue, r.currency)).join('\n');
-  if (!confirm('Post to Business Central?\n\n' + list + '\n\nThis receives anything not yet received and posts the purchase invoice (payables, tax, G/L). It cannot be undone from this app.')) return null;
-  const posted = [];
-  for (const r of chk.results) {
-    btn.textContent = 'Posting ' + r.poNo + '…';
-    try {
-      await bcWriteDraft(r);   // make sure the latest values are on the PO
-      for (const l of (r.po.purchaseOrderLines || []).filter(x => Number(x.quantity) > 0)) {
-        const q = Number(l.quantity) || 0, rec = Number(l.receivedQuantity) || 0, inv = Number(l.invoicedQuantity) || 0;
-        const url = '/purchaseOrders(' + r.po.id + ')/purchaseOrderLines(' + l.id + ')';
-        // separate PATCHes: setting Qty. to Receive makes BC recalculate Qty. to Invoice
-        await bcStd(r.company.id, url, { method: 'PATCH', headers: { 'If-Match': '*' }, body: JSON.stringify({ receiveQuantity: q - rec }) });
-        await bcStd(r.company.id, url, { method: 'PATCH', headers: { 'If-Match': '*' }, body: JSON.stringify({ invoiceQuantity: q - inv }) });
-      }
-      await bcStd(r.company.id, '/purchaseOrders(' + r.po.id + ')/Microsoft.NAV.receiveAndInvoice', { method: 'POST', headers: { 'If-Match': '*' }, body: '{}' });
-      posted.push(r.poNo);
-    } catch (e) {
-      const note = (posted.length ? 'Posted: ' + posted.join(', ') + '\n' : '') + 'Failed on ' + r.poNo + ': ' + e.message;
-      await bcRecordStatus(record, posted.length ? BC_STATUS.DRAFT : record.bcStatus || BC_STATUS.DRAFT, note,
-        currentAccount.username + ' tried to post to BC' + (posted.length ? ' — posted ' + posted.join(', ') + ', ' : ' — ') + 'failed on ' + r.poNo + ': ' + e.message);
-      throw new Error((posted.length ? posted.join(', ') + ' posted, but ' : '') + r.poNo + ' failed: ' + e.message);
-    }
-  }
-  const now = nowIso();
-  await bcRecordStatus(record, BC_STATUS.POSTED, chk.results.map(bcDraftSummary).join('\n'),
-    currentAccount.username + ' posted ' + posted.join(', ') + ' in BC (received and invoiced). Marked as recorded in BC.',
-    { bcRecorded: true, bcRecordedBy: currentAccount.username, bcRecordedDate: now, poNumbers: inputs.poNumbers.join(', ') });
-  return 'Posted ' + posted.join(', ') + ' in Business Central.';
+    ? 'Posting details saved as a draft on ' + (total > 1 ? 'all ' + total + ' POs' : poNumbers) + ' in BC. Post them in BC, then tick "Recorded in BC".'
+    : 'Posting Date and Payment Terms saved on ' + (total > 1 ? 'all ' + total + ' POs' : poNumbers) + ' in BC. Enter Vendor Invoice No., Document Date and Due Date in BC, post, then tick "Recorded in BC".';
 }
 
 /* ---- the Business Central section in the request modal (Finance only) ---- */
 function bcPanelApplies(record, mode){
   if (!isFinanceUser()) return false;
+  if (record.bcRecorded) return false;   // already recorded in BC (ticked by Finance or posted from here) — nothing left to do
   return mode === 'finance' || (mode === 'mine' && record.status === STATUS.PROCESSED);
 }
 function bcPanelHtml(record, mode){
   const pos = record.poNumbers || bcGuessPoNumbers(record);
   const posted = record.bcStatus === BC_STATUS.POSTED;
   const intro = mode === 'finance'
-    ? 'The PO / MPO is checked against BC below. When you click <strong>Mark as processed / paid</strong>, the posting details are saved on the PO in BC as a <strong>draft (not posted)</strong>; you then post it from here.'
+    ? 'Each PO / MPO is checked against BC below. When you click <strong>Mark as processed / paid</strong>, the posting details are saved on every PO in BC as a <strong>draft (not posted)</strong>. Posting is done in BC; afterwards tick <strong>Recorded in BC</strong>.'
     : posted ? 'This request has been posted in Business Central.'
-    : 'Review the details, then <strong>Post in BC</strong> (receives and invoices the PO). Edit a value and click <strong>Save draft in BC</strong> to update the PO without posting.';
+    : 'Edit any value and click <strong>Save draft in BC</strong> to update the PO(s) in BC without posting. Post them in BC, then tick <strong>Recorded in BC</strong> above.';
   return '<hr class="section-divider"><div id="bc-panel" class="bc-panel">' +
     '<div class="bc-head"><strong>Business Central</strong>' + (record.bcStatus ? ' ' + bcStatusPill(record.bcStatus) : '') + '</div>' +
     '<div class="muted small" style="margin-bottom:10px;">' + intro + '</div>' +
@@ -5174,8 +5226,7 @@ function bcPanelHtml(record, mode){
       '<div class="btn-row" style="justify-content:flex-start; margin-top:4px;">' +
         '<button type="button" class="btn btn-ghost" id="bc-btn-check" onclick="bcHandleCheck()">Check in BC</button>' +
         (mode === 'finance' ? '' :
-          '<button type="button" class="btn btn-ghost" id="bc-btn-draft" onclick="bcHandleSaveDraft()">Save draft in BC</button>' +
-          '<button type="button" class="btn btn-primary" id="bc-btn-post" onclick="bcHandlePost()">Post in BC</button>') +
+          '<button type="button" class="btn btn-primary" id="bc-btn-draft" onclick="bcHandleSaveDraft()">Save draft in BC</button>') +
       '</div>') +
     '<div id="bc-results"></div>' +
     (record.bcNotes ? '<div class="field-hint" style="white-space:pre-wrap; margin-top:8px;"><strong>Last BC note:</strong> ' + escapeHtml(record.bcNotes) + '</div>' : '') +
@@ -5211,7 +5262,12 @@ function bcRenderResults(chk){
   const field = (r, k, label, type, onlyExt) =>
     '<label class="bc-field">' + label + (onlyExt && !ext ? ' <span class="muted">(enter in BC)</span>' : '') +
     '<input class="text-field" type="' + type + '" data-k="' + k + '" value="' + escapeHtml(r.draft[k] || '') + '"' + (onlyExt && !ext ? ' disabled' : '') + '></label>';
-  box.innerHTML = chk.results.map(r =>
+  const n = chk.results.length, found = chk.results.filter(r => r.po).length, issues = chk.results.filter(r => r.blocking).length;
+  const summary = n > 1
+    ? '<div class="bc-note' + (issues ? ' warn' : '') + '" style="margin-top:0;">' + n + ' PO / MPO numbers \u00B7 ' + found + ' found in BC \u00B7 ' +
+        (issues ? issues + ' with issues (skipped when saving the draft)' : 'no blocking issues') + '</div>'
+    : '';
+  box.innerHTML = summary + chk.results.map(r =>
     '<div class="bc-po">' +
       '<div class="bc-po-title">' + escapeHtml(r.poNo) + (r.po ? ' <span class="muted small">· ' + escapeHtml(r.company.name) + ' · PO total ' + fmtAmount(r.po.totalAmountIncludingTax, r.currency) + '</span>' : '') + '</div>' +
       '<ul class="bc-checks">' + r.checks.map(c => '<li class="' + c.level + '"><span class="bc-ic">' + icon[c.level] + '</span>' + escapeHtml(c.text) + '</li>').join('') + '</ul>' +
@@ -5224,6 +5280,7 @@ function bcRenderResults(chk){
       '</div>' : '') +
     '</div>').join('') +
     (chk.amountNote ? '<div class="bc-note warn">' + escapeHtml(chk.amountNote) + '</div>' : '') +
+    (chk.amountOk ? '<div class="bc-note ok">\u2713 ' + escapeHtml(chk.amountOk) + '</div>' : '') +
     (!ext ? '<div class="bc-note">Standard BC API: only Posting Date and Payment Terms can be written. Install the AP Portal extension to also fill Vendor Invoice No., Document Date and Due Date.</div>' : '');
 }
 async function bcHandleCheck(silent){
@@ -5251,18 +5308,123 @@ async function bcHandleSaveDraft(){
   setBusy(btn, false);
   if (msg) { showToast(msg, /not saved/i.test(msg) ? 'error' : 'success'); await refreshAll(); openDetail(record.id, 'mine'); }
 }
-async function bcHandlePost(){
-  const record = modalContext && modalContext.record;
-  const inputs = bcReadPanelInputs();
-  if (!record || !inputs || !inputs.poNumbers.length) { showToast('Enter the PO / MPO number first.', 'error'); return; }
-  const btn = document.getElementById('bc-btn-post');
-  setBusy(btn, true, 'Posting…');
-  let msg = null, failed = false;
-  try { msg = await bcPost(record, inputs, btn); }
-  catch (e) { failed = true; showToast('Could not post to BC: ' + e.message, 'error'); }
-  setBusy(btn, false);
-  if (msg) showToast(msg, 'success');
-  if (msg || failed) { await refreshAll(); openDetail(record.id, 'mine'); }   // show the saved BC status / note
+/* =====================================================================
+   Top bar: account menu (other Saxon apps + sign out) and notification bell
+   ===================================================================== */
+/* Links shown in the account menu. Leave url "" to hide an entry until its address is known. */
+const APP_LINKS = [
+  { label: 'Saxon Task Management & Tools', url: '' },
+  { label: 'Saxon AP Request System', url: APP_URL, current: true },
+  { label: 'SolarLink Connect — Multi-Brand Inverter API Extraction', url: '' },
+  { label: 'Saxon Finance Dashboard', url: 'https://shawnwork911-glitch.github.io/FinanceOverview/' }
+];
+function renderAppLinks(){
+  document.getElementById('app-links').innerHTML = APP_LINKS.filter(l => l.url).map(l => l.current
+    ? '<div class="um-item um-current">' + escapeHtml(l.label) + ' <span class="um-here">this app</span></div>'
+    : '<a class="um-item" href="' + escapeHtml(l.url) + '" target="_blank" rel="noopener">' + escapeHtml(l.label) + ' <span class="um-arrow">&#8599;</span></a>'
+  ).join('');
+}
+function closePops(except){
+  document.querySelectorAll('.pop-panel').forEach(p => {
+    if (p.id === except) return;
+    p.hidden = true;
+    const btn = p.parentElement.querySelector('[aria-haspopup]');
+    if (btn) btn.setAttribute('aria-expanded', 'false');
+  });
+}
+function togglePop(id, ev){
+  if (ev) ev.stopPropagation();
+  const panel = document.getElementById(id);
+  const open = panel.hidden;
+  closePops(id);
+  panel.hidden = !open;
+  const btn = panel.parentElement.querySelector('[aria-haspopup]');
+  if (btn) btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+document.addEventListener('click', e => { if (!e.target.closest('.pop-wrap')) closePops(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closePops(); });
+
+/* ---- Notifications ----
+   Built from the requests already loaded (no extra SharePoint calls), so they update on every
+   refresh. "Needs your action" items stay until the request moves on; "read" is remembered per
+   person in this browser. */
+const NOTIF_DAYS = 30;   // updates older than this are not shown
+function notifSeenKey(){ return 'ap-notif-seen:' + myEmail(); }
+function notifSeen(){
+  try { return new Set(JSON.parse(localStorage.getItem(notifSeenKey()) || '[]')); } catch (e) { return new Set(); }
+}
+function saveNotifSeen(set){
+  try { localStorage.setItem(notifSeenKey(), JSON.stringify([...set].slice(-500))); } catch (e) { /* not critical */ }
+}
+function buildNotifications(){
+  const me = myEmail();
+  const cutoff = Date.now() - NOTIF_DAYS * 86400000;
+  const recent = ts => ts && new Date(ts).getTime() >= cutoff;
+  const fin = isFinanceUser();
+  const out = [];
+  const add = (r, type, text, mode, ts, action) => out.push({ key: type + ':' + r.id + ':' + (ts || ''), id: r.id, text, mode, ts: ts || '', action: !!action,
+    sub: (r.vendorName || '') + (r.invoiceNumber ? ' · ' + r.invoiceNumber : '') + ' · ' + fmtAmount(r.amount, r.currency) });
+  allItemsCache.forEach(r => {
+    const mine = (r.requestorEmail || '').toLowerCase() === me;
+    if (r.status === STATUS.PENDING_APPROVAL && (r.approverEmail || '').toLowerCase() === me)
+      add(r, 'approve', (r.isUrgent ? 'URGENT — ' : '') + 'Waiting for your approval', 'approve', r.submittedDate, true);
+    if (fin && r.status === STATUS.PENDING_FINANCE)
+      add(r, 'finance', 'Approved — ready for Finance review', 'finance', r.approvalDate, true);
+    if (fin && r.status === STATUS.PROCESSED && r.bcStatus === BC_STATUS.DRAFT && !r.bcRecorded)
+      add(r, 'bcpost', 'BC draft saved — ready to post in Business Central', 'mine', r.financeDecisionDate, true);
+    if (fin && r.bcStatus === BC_STATUS.ISSUES && !r.bcRecorded)
+      add(r, 'bcissue', 'Business Central check found issues', r.status === STATUS.PENDING_FINANCE ? 'finance' : 'mine', r.financeDecisionDate || r.approvalDate, true);
+    if (mine && r.status === STATUS.PENDING_INFO)
+      add(r, 'info', 'Finance needs more information from you', 'mine', r.financeDecisionDate, true);
+    if (mine && r.status === STATUS.REJECTED_APPROVER && recent(r.approvalDate))
+      add(r, 'rejA', 'Your request was rejected by the approver', 'mine', r.approvalDate);
+    if (mine && r.status === STATUS.REJECTED_FINANCE && recent(r.financeDecisionDate))
+      add(r, 'rejF', 'Your request was rejected by Finance', 'mine', r.financeDecisionDate);
+    if (mine && r.status === STATUS.PENDING_FINANCE && recent(r.approvalDate))
+      add(r, 'appr', 'Your request was approved and sent to Finance', 'mine', r.approvalDate);
+    if (mine && r.status === STATUS.PROCESSED && recent(r.financeDecisionDate))
+      add(r, 'done', 'Your request has been processed / paid', 'mine', r.financeDecisionDate);
+    // newest comment by someone else, on a request I'm involved in
+    const involved = mine || (r.approverEmail || '').toLowerCase() === me || (fin && r.status !== STATUS.DRAFT);
+    if (involved) {
+      const c = parseComments(r.comments).filter(x => (x.by || '').toLowerCase() !== me && recent(x.at)).pop();
+      if (c) add(r, 'comment', 'New comment from ' + (c.name || c.by) + ': “' + String(c.text || '').slice(0, 80) + (String(c.text || '').length > 80 ? '…' : '') + '”', 'mine', c.at);
+    }
+  });
+  out.sort((a, b) => (b.action - a.action) || String(b.ts).localeCompare(String(a.ts)));
+  return out.slice(0, 40);
+}
+let currentNotifications = [];
+function renderNotifications(){
+  if (!currentAccount) return;
+  currentNotifications = buildNotifications();
+  const seen = notifSeen();
+  const unseen = currentNotifications.filter(n => !seen.has(n.key)).length;
+  const badge = document.getElementById('notif-count');
+  badge.hidden = !unseen;
+  badge.textContent = unseen > 9 ? '9+' : String(unseen);
+  document.getElementById('notif-btn').title = unseen ? unseen + ' new notification' + (unseen > 1 ? 's' : '') : 'Notifications';
+  document.getElementById('notif-list').innerHTML = currentNotifications.length
+    ? currentNotifications.map((n, i) =>
+        '<button type="button" class="np-item' + (seen.has(n.key) ? '' : ' unread') + (n.action ? ' action' : '') + '" onclick="openNotification(' + i + ')">' +
+          '<span class="np-text">' + escapeHtml(n.text) + '</span>' +
+          '<span class="np-sub">' + escapeHtml(n.sub) + (n.ts ? ' · ' + escapeHtml(fmtDateTime(n.ts)) : '') + '</span>' +
+        '</button>').join('')
+    : '<div class="np-empty">You\'re all caught up.</div>';
+}
+function openNotification(i){
+  const n = currentNotifications[i];
+  if (!n) return;
+  const seen = notifSeen(); seen.add(n.key); saveNotifSeen(seen);
+  closePops();
+  renderNotifications();
+  openDetail(n.id, n.mode);
+}
+function markAllNotificationsRead(){
+  const seen = notifSeen();
+  currentNotifications.forEach(n => seen.add(n.key));
+  saveNotifSeen(seen);
+  renderNotifications();
 }
 
 (async function init(){
