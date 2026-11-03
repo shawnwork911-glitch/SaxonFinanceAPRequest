@@ -641,6 +641,16 @@ html.desk-nav-hidden #tabs{transform:translateX(-100%);visibility:hidden;}
   .np-sub { font-size: 11.5px; color: var(--sub); }
   .np-empty { padding: 18px 10px; text-align: center; color: var(--sub); font-size: 13px; }
   @media print { .pop-wrap { display: none !important; } }
+  #bc-confirm-overlay { display: none; position: fixed; inset: 0; z-index: 270; background: rgba(10,16,20,.6); align-items: flex-start; justify-content: center; padding: 60px 16px; overflow-y: auto; }
+  .bc-confirm-card { background: var(--panel); color: var(--ink); border-radius: 12px; width: 100%; max-width: 820px; padding: 22px 24px 18px; box-shadow: 0 16px 50px rgba(0,0,0,.35); border: 1px solid var(--line); }
+  .bc-confirm-card h3 { font-size: 17px; }
+  .bc-confirm-card ul { margin: 6px 0; padding-left: 18px; }
+  .bc-confirm-table { overflow-x: auto; margin-top: 12px; }
+  .bc-confirm-table table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .bc-confirm-table th, .bc-confirm-table td { padding: 8px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+  .bc-confirm-table .num { text-align: right; white-space: nowrap; }
+  .bc-confirm-tick { display: flex; gap: 8px; align-items: flex-start; margin-top: 14px; font-size: 13px; font-weight: 600; cursor: pointer; }
+  .bc-confirm-tick input { margin-top: 2px; width: 16px; height: 16px; flex: none; }
 </style>
 </head>
 <body>
@@ -4911,8 +4921,9 @@ initTheme();
           -> Finance clicks "Mark as processed / paid": Vendor Invoice No. (= request's Document
              Number), Posting Date and Document Date (= request's Document Date) are saved on each
              PO in BC, NOT posted (= draft). All can change on a Released PO; no reopen needed.
-          -> Finance posts the PO(s) manually in BC, then ticks "Recorded in BC" here
-             (which hides the Business Central section on that request).
+          -> Finance clicks "Post in BC" (a confirmation box lists every detail first; posting
+             can't be reverted), or posts in BC and ticks "Recorded in BC". Either way the
+             Business Central section is then hidden on that request.
    Several PO / MPO numbers on one request are each checked and drafted separately.
    Setup:
    1. Azure portal > App registrations > "Finance AP Request" > API permissions > Add >
@@ -5078,6 +5089,12 @@ async function bcCheck(record, inputs){
     if (!hit) { add('bad', 'No open purchase order ' + poNo + ' found in any BC company you can access. It may already be fully posted, or the number is different.'); continue; }
     const { company, po } = hit;
     r.company = company; r.po = po;
+    // What BC has on the PO right now (shown read-only once the draft has been saved).
+    r.current = { postingDate: po.postingDate };
+    if (bcHasExtension()) {
+      try { const h = await bcFetch(bcExtUrl(company.id, po.id)); r.current = { postingDate: h.postingDate, documentDate: h.documentDate, vendorInvoiceNo: h.vendorInvoiceNo }; }
+      catch (e) { /* not critical */ }
+    }
     add('ok', 'Found in ' + company.name);
     const expEnt = poEntityFor(poNo, record);
     if (company.entity && company.entity !== expEnt) add('warn', 'The PO was found in the ' + company.entity + ' company, but ' + poNo + ' would normally be ' + expEnt + '.');
@@ -5208,6 +5225,109 @@ async function bcSaveDraft(record, inputs, auto){
     : 'Posting Date saved on ' + (total > 1 ? 'all ' + total + ' POs' : poNumbers) + ' in BC (not posted). Set the Vendor Invoice No. and Document Date in BC, post, then tick "Recorded in BC".';
 }
 
+/* ---- Post in BC (after the draft is saved) ----
+   Re-checks every PO, shows a confirmation box with exactly what will be posted, and only then
+   receives anything not yet received and posts the purchase invoice for each PO. */
+let bcPostPending = null;   // { record, chk } while the confirmation box is open
+async function bcHandlePost(){
+  const record = modalContext && modalContext.record;
+  const inputs = bcReadPanelInputs();
+  if (!record || !inputs || !inputs.poNumbers.length) { showToast('Enter the PO / MPO number first.', 'error'); return; }
+  const btn = document.getElementById('bc-btn-post');
+  setBusy(btn, true, 'Checking…');
+  let chk = null;
+  try { chk = await bcCheck(record, inputs); bcRenderResults(chk); }
+  catch (e) { showToast('Could not check BC: ' + e.message, 'error'); }
+  setBusy(btn, false);
+  if (!chk) return;
+  const problems = [];
+  chk.results.forEach(r => {
+    if (r.blocking) problems.push(r.poNo + ': ' + r.checks.filter(c => c.level === 'bad').map(c => c.text).join(' '));
+    else if (bcHasExtension() && !(r.current && r.current.vendorInvoiceNo)) problems.push(r.poNo + ': Vendor Invoice No. is empty on the PO in BC.');
+  });
+  if (chk.amountNote) problems.push(chk.amountNote + ' Posting from here invoices everything still open on each PO — for a partial invoice, post it in BC.');
+  bcShowPostConfirm(record, chk, problems);
+}
+function bcShowPostConfirm(record, chk, problems){
+  bcPostPending = { record, chk };
+  let ov = document.getElementById('bc-confirm-overlay');
+  if (!ov) {
+    ov = document.createElement('div'); ov.id = 'bc-confirm-overlay';
+    ov.addEventListener('click', e => { if (e.target === ov) bcClosePostConfirm(); });
+    document.body.appendChild(ov);
+  }
+  const v = (r, k) => (r.current && r.current[k]) || (k === 'postingDate' ? r.po.postingDate : '') || '—';
+  const total = chk.results.reduce((a, r) => a + (r.openValue || 0), 0);
+  const rows = chk.results.filter(r => r.po).map(r =>
+    '<tr><td><strong>' + escapeHtml(r.poNo) + '</strong><div class="muted small">' + escapeHtml(r.company.name) + '</div></td>' +
+    '<td>' + escapeHtml(r.po.vendorName) + '<div class="muted small">' + escapeHtml(r.po.vendorNumber) + '</div></td>' +
+    '<td>' + escapeHtml(v(r, 'vendorInvoiceNo')) + '</td>' +
+    '<td>' + escapeHtml(v(r, 'postingDate') === '—' ? '—' : fmtDate(v(r, 'postingDate') + 'T00:00:00')) + '</td>' +
+    '<td>' + escapeHtml(v(r, 'documentDate') === '—' ? '—' : fmtDate(v(r, 'documentDate') + 'T00:00:00')) + '</td>' +
+    '<td class="num">' + escapeHtml(fmtAmount(r.openValue, r.currency)) + '</td></tr>').join('');
+  ov.innerHTML = '<div class="bc-confirm-card" role="dialog" aria-modal="true" aria-labelledby="bc-confirm-title">' +
+    '<h3 id="bc-confirm-title">Post to Business Central?</h3>' +
+    (problems.length
+      ? '<div class="bc-note bad" style="margin-top:8px;"><strong>This can\'t be posted from here yet:</strong><ul>' + problems.map(p => '<li>' + escapeHtml(p) + '</li>').join('') + '</ul>Fix these in BC (or post it in BC directly), then try again.</div>'
+      : '<div class="bc-note warn" style="margin-top:8px;"><strong>Please make sure every detail below is correct.</strong> Posting receives anything not yet received and posts the purchase invoice (payables, tax and G/L entries). <strong>Once posted, it cannot be reverted from this app</strong> — a mistake needs a credit memo / corrective document in BC.</div>') +
+    '<div class="bc-confirm-table"><table class="data-table"><thead><tr><th>PO / MPO</th><th>Vendor</th><th>Vendor Invoice No.</th><th>Posting Date</th><th>Document Date</th><th class="num">Amount to invoice</th></tr></thead><tbody>' + rows + '</tbody>' +
+      (chk.results.length > 1 ? '<tfoot><tr><td colspan="5"><strong>Total</strong></td><td class="num"><strong>' + escapeHtml(fmtAmount(total, record.currency)) + '</strong></td></tr></tfoot>' : '') +
+    '</table></div>' +
+    '<div class="muted small" style="margin-top:6px;">AP request: ' + escapeHtml(record.requestId || '') + ' · ' + escapeHtml(record.vendorName) + ' · ' + escapeHtml(fmtAmount(record.amount, record.currency)) + '</div>' +
+    (problems.length ? '' :
+      '<label class="bc-confirm-tick"><input type="checkbox" id="bc-confirm-check" onchange="document.getElementById(\'bc-confirm-go\').disabled = !this.checked"> I have checked the details above and understand the posting cannot be reverted.</label>') +
+    '<div class="btn-row">' +
+      '<button type="button" class="btn btn-ghost" onclick="bcClosePostConfirm()">Cancel</button>' +
+      (problems.length ? '' : '<button type="button" class="btn btn-danger" id="bc-confirm-go" disabled onclick="bcConfirmPost()">Post to BC</button>') +
+    '</div></div>';
+  ov.style.display = 'flex';
+}
+function bcClosePostConfirm(){
+  const ov = document.getElementById('bc-confirm-overlay');
+  if (ov) ov.style.display = 'none';
+  bcPostPending = null;
+}
+async function bcConfirmPost(){
+  if (!bcPostPending) return;
+  const { record, chk } = bcPostPending;
+  const go = document.getElementById('bc-confirm-go');
+  setBusy(go, true, 'Posting…');
+  document.querySelectorAll('#bc-confirm-overlay .btn-ghost').forEach(b => b.disabled = true);
+  const posted = [];
+  let failMsg = '';
+  for (const r of chk.results) {
+    go.textContent = 'Posting ' + r.poNo + '…';
+    try {
+      for (const l of (r.po.purchaseOrderLines || []).filter(x => Number(x.quantity) > 0)) {
+        const q = Number(l.quantity) || 0, rec = Number(l.receivedQuantity) || 0, inv = Number(l.invoicedQuantity) || 0;
+        const url = '/purchaseOrders(' + r.po.id + ')/purchaseOrderLines(' + l.id + ')';
+        // separate PATCHes: setting Qty. to Receive makes BC recalculate Qty. to Invoice
+        await bcStd(r.company.id, url, { method: 'PATCH', headers: { 'If-Match': '*' }, body: JSON.stringify({ receiveQuantity: q - rec }) });
+        await bcStd(r.company.id, url, { method: 'PATCH', headers: { 'If-Match': '*' }, body: JSON.stringify({ invoiceQuantity: q - inv }) });
+      }
+      await bcStd(r.company.id, '/purchaseOrders(' + r.po.id + ')/Microsoft.NAV.receiveAndInvoice', { method: 'POST', headers: { 'If-Match': '*' }, body: '{}' });
+      posted.push(r);
+    } catch (e) { failMsg = r.poNo + ': ' + e.message; break; }
+  }
+  const summary = posted.map(r => r.poNo + ' (' + r.company.name + '): Vendor Invoice No. ' + ((r.current && r.current.vendorInvoiceNo) || '-') +
+    ', Posting Date ' + ((r.current && r.current.postingDate) || r.po.postingDate || '-') + ', ' + fmtAmount(r.openValue, r.currency)).join('\n');
+  try {
+    if (!failMsg) {
+      await bcRecordStatus(record, BC_STATUS.POSTED, 'Posted:\n' + summary,
+        currentAccount.username + ' posted ' + posted.map(r => r.poNo).join(', ') + ' in BC (received and invoiced). Marked as recorded in BC.',
+        { bcRecorded: true, bcRecordedBy: currentAccount.username, bcRecordedDate: nowIso() });
+    } else {
+      await bcRecordStatus(record, BC_STATUS.ISSUES, (posted.length ? 'Posted:\n' + summary + '\n' : '') + 'Not posted — ' + failMsg,
+        currentAccount.username + ' tried to post in BC' + (posted.length ? ': posted ' + posted.map(r => r.poNo).join(', ') + ',' : ':') + ' failed on ' + failMsg);
+    }
+  } catch (e) { /* the BC posting result matters more; the SharePoint note is best-effort */ }
+  bcClosePostConfirm();
+  if (failMsg) showToast((posted.length ? posted.map(r => r.poNo).join(', ') + ' posted, but ' : 'Not posted — ') + failMsg, 'error');
+  else showToast('Posted ' + posted.map(r => r.poNo).join(', ') + ' in Business Central. Marked as recorded in BC.', 'success');
+  await refreshAll();
+  openDetail(record.id, 'mine');
+}
+
 /* ---- the Business Central section in the request modal (Finance only) ---- */
 function bcPanelApplies(record, mode){
   if (!isFinanceUser()) return false;
@@ -5220,19 +5340,22 @@ function bcPanelHtml(record, mode){
   const intro = mode === 'finance'
     ? 'Each PO / MPO is checked against BC below. When you click <strong>Mark as processed / paid</strong>, the posting details are saved on every PO in BC as a <strong>draft (not posted)</strong>. Posting is done in BC; afterwards tick <strong>Recorded in BC</strong>.'
     : posted ? 'This request has been posted in Business Central.'
-    : 'Edit any value and click <strong>Save draft in BC</strong> to update the PO(s) in BC without posting. Post them in BC, then tick <strong>Recorded in BC</strong> above.';
+    : record.bcStatus === BC_STATUS.DRAFT
+      ? 'The draft is saved on the PO(s) in BC. Click <strong>Post in BC</strong> to post (you\'ll see the details to confirm first), or post in Business Central and tick <strong>Recorded in BC</strong> above. To change a value, edit it on the PO in BC.'
+      : 'Edit any value and click <strong>Save draft in BC</strong> to update the PO(s) in BC without posting. Post them in BC, then tick <strong>Recorded in BC</strong> above.';
   return '<hr class="section-divider"><div id="bc-panel" class="bc-panel">' +
     '<div class="bc-head"><strong>Business Central</strong>' + (record.bcStatus ? ' ' + bcStatusPill(record.bcStatus) : '') + '</div>' +
     '<div class="muted small" style="margin-bottom:10px;">' + intro + '</div>' +
     '<div class="field-row"><label class="field-label">PO / MPO No.</label>' +
-      '<input class="text-field" type="text" id="bc-po-numbers" value="' + escapeHtml(pos) + '" placeholder="e.g. SPO-2610-0009, MPO-2510-1000, 26080061">' +
+      '<input class="text-field" type="text" id="bc-po-numbers" value="' + escapeHtml(pos) + '" placeholder="e.g. SPO-2610-0009, MPO-2510-1000, 26080061"' + (record.bcStatus === BC_STATUS.DRAFT ? ' readonly' : '') + '>' +
       '<div class="field-hint">' + (!record.poNumbers && pos ? 'Detected from the attached document names — edit if needed. ' : '') +
         'SPO numbers are looked up in the SG company, MPO numbers in the MY company, others by currency. Separate several with commas.</div></div>' +
     (posted ? '' :
       '<div class="btn-row" style="justify-content:flex-start; margin-top:4px;">' +
         '<button type="button" class="btn btn-ghost" id="bc-btn-check" onclick="bcHandleCheck()">Check in BC</button>' +
-        (mode === 'finance' ? '' :
-          '<button type="button" class="btn btn-primary" id="bc-btn-draft" onclick="bcHandleSaveDraft()">Save draft in BC</button>') +
+        (mode === 'finance' ? '' : record.bcStatus === BC_STATUS.DRAFT
+          ? '<button type="button" class="btn btn-gold" id="bc-btn-post" onclick="bcHandlePost()">Post in BC</button>'
+          : '<button type="button" class="btn btn-primary" id="bc-btn-draft" onclick="bcHandleSaveDraft()">Save draft in BC</button>') +
       '</div>') +
     '<div id="bc-results"></div>' +
     (record.bcNotes ? '<div class="field-hint" style="white-space:pre-wrap; margin-top:8px;"><strong>Last BC note:</strong> ' + escapeHtml(record.bcNotes) + '</div>' : '') +
@@ -5264,9 +5387,13 @@ function bcRenderResults(chk){
   if (!box) return;
   const icon = { ok: '✓', warn: '!', bad: '✕' };
   const ext = bcHasExtension();
-  const field = (r, k, label, type, onlyExt) =>
-    '<label class="bc-field">' + label + (onlyExt && !ext ? ' <span class="muted">(enter in BC)</span>' : '') +
-    '<input class="text-field" type="' + type + '" data-k="' + k + '" value="' + escapeHtml(r.draft[k] || '') + '"' + (onlyExt && !ext ? ' disabled' : '') + '></label>';
+  const rec = modalContext && modalContext.record;
+  const locked = !!(rec && rec.bcStatus === BC_STATUS.DRAFT && !document.getElementById('bc-btn-draft'));   // draft already saved: show what BC has, read-only
+  const field = (r, k, label, type, onlyExt) => {
+    const val = locked && r.po && r.current && r.current[k] != null ? r.current[k] : r.draft[k];
+    return '<label class="bc-field">' + label + (onlyExt && !ext ? ' <span class="muted">(enter in BC)</span>' : '') +
+      '<input class="text-field" type="' + type + '" data-k="' + k + '" value="' + escapeHtml(val || '') + '"' + ((onlyExt && !ext) || locked ? ' disabled' : '') + '></label>';
+  };
   const n = chk.results.length, found = chk.results.filter(r => r.po).length, issues = chk.results.filter(r => r.blocking).length;
   const summary = n > 1
     ? '<div class="bc-note' + (issues ? ' warn' : '') + '" style="margin-top:0;">' + n + ' PO / MPO numbers \u00B7 ' + found + ' found in BC \u00B7 ' +
