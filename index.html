@@ -559,6 +559,24 @@ button.secondary,.btn,.tab-btn,.main-tab-btn,.subtab-btn,.task-subtab-btn,.rqa-s
 #tabs{transition:transform .2s ease;}
 html.desk-nav-hidden{--side-w:0px;}
 html.desk-nav-hidden #tabs{transform:translateX(-100%);visibility:hidden;}
+  /* Business Central section (Finance) */
+  .bc-panel .bc-head { display:flex; align-items:center; gap:8px; margin-bottom:4px; font-size:14px; }
+  .bc-pill-draft { background: var(--accent-light); color: var(--accent); }
+  .bc-pill-bad { background: var(--bad-bg); color: var(--bad); }
+  .bc-po { border:1px solid var(--line); border-radius:8px; padding:10px 12px; margin-top:10px; background: var(--paper); }
+  .bc-po-title { font-weight:700; font-size:13.5px; margin-bottom:6px; }
+  .bc-checks { list-style:none; margin:0 0 8px; padding:0; font-size:12.5px; }
+  .bc-checks li { display:flex; gap:6px; padding:2px 0; }
+  .bc-checks .bc-ic { width:14px; flex:none; font-weight:700; text-align:center; }
+  .bc-checks li.ok .bc-ic { color: var(--good); }
+  .bc-checks li.warn { color: var(--warn); }
+  .bc-checks li.bad { color: var(--bad); }
+  .bc-draft { display:grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap:8px; }
+  .bc-field { font-size:12px; color: var(--sub); }
+  .bc-field .text-field { margin-top:3px; }
+  .bc-note { margin-top:10px; padding:8px 12px; border-radius:8px; font-size:12.5px; background: var(--accent-light); color: var(--sub); }
+  .bc-note.warn { background: var(--warn-bg); color: var(--warn); }
+  .bc-note.bad { background: var(--bad-bg); color: var(--bad); }
 </style>
 </head>
 <body>
@@ -643,6 +661,11 @@ html.desk-nav-hidden #tabs{transform:translateX(-100%);visibility:hidden;}
         <div class="field-row">
           <label class="field-label">Document Number <span class="req">*</span></label>
           <input class="text-field" type="text" id="f-invoice-number" placeholder="e.g. DOC-10234">
+        </div>
+        <div class="field-row">
+          <label class="field-label">PO / MPO No.</label>
+          <input class="text-field" type="text" id="f-po-numbers" placeholder="e.g. MPO000123, MPO000124">
+          <div class="field-hint">Filled from the uploaded PO. Finance uses it to find the order in Business Central. Separate several with commas.</div>
         </div>
         <div class="field-row">
           <label class="field-label">Payment Terms <span class="req">*</span></label>
@@ -1379,7 +1402,11 @@ const DATA_FIELD_MAP = {
   Comments: 'comments', // JSON array of { at, by, name, text } — see commentsHtml()
   /* Finance-only bookkeeping flag: ticked once the request has been entered in Business Central.
      Needs three Single-line-of-text columns on the list: BCRecorded ("Yes"/"No"), BCRecordedBy, BCRecordedDate. */
-  BCRecorded: 'bcRecorded', BCRecordedBy: 'bcRecordedBy', BCRecordedDate: 'bcRecordedDate'
+  BCRecorded: 'bcRecorded', BCRecordedBy: 'bcRecordedBy', BCRecordedDate: 'bcRecordedDate',
+  /* Business Central link (see the "Business Central integration" section). Add these as
+     Single line of text (PONumbers, BCStatus) and Multiple lines of text (BCNotes) columns.
+     If they're missing the app still works — PO numbers just aren't remembered on the request. */
+  PONumbers: 'poNumbers', BCStatus: 'bcStatus', BCNotes: 'bcNotes'
 };
 
 let currentAccount = null;
@@ -2522,6 +2549,7 @@ function applyPoEntriesToForm(){
   if (curSel.value === first.currency) filled.push('f-currency');
   else { curSel.value = ''; setPoMsg('Currency ' + first.currency + ' is not in the currency list. Please choose it manually.', 'warn'); }
   document.getElementById('f-description').value = items.join(', '); filled.push('f-description');
+  document.getElementById('f-po-numbers').value = poEntries.map(p => p.poNo).join(', '); filled.push('f-po-numbers');
   const label = matchPaymentTermLabel(first.terms);
   if (label) { document.getElementById('f-payment-terms').value = label; filled.push('f-payment-terms'); }
   else {
@@ -2622,7 +2650,7 @@ function toggleUrgentJustification(){
 }
 function clearNewRequestForm(){
   document.getElementById('f-payment-terms').innerHTML = paymentTermOptionsHtml('');
-  ['f-vendor','f-invoice-number','f-invoice-date','f-due-date','f-amount','f-description','f-urgent-justification'].forEach(id => {
+  ['f-vendor','f-invoice-number','f-po-numbers','f-invoice-date','f-due-date','f-amount','f-description','f-urgent-justification'].forEach(id => {
     document.getElementById(id).value = '';
   });
   document.getElementById('f-department').value = defaultDepartmentForUser();
@@ -2641,6 +2669,7 @@ function readNewRequestForm(){
     department: document.getElementById('f-department').value,
     vendorName: document.getElementById('f-vendor').value.trim(),
     invoiceNumber: document.getElementById('f-invoice-number').value.trim(),
+    poNumbers: normalizePoNumbers(document.getElementById('f-po-numbers').value),
     paymentTerms: document.getElementById('f-payment-terms').value.trim(),
     invoiceDate: document.getElementById('f-invoice-date').value ? new Date(document.getElementById('f-invoice-date').value).toISOString() : '',
     dueDate: dateInputToIso(document.getElementById('f-due-date').value),
@@ -3549,6 +3578,7 @@ function openDetail(id, mode){
   document.getElementById('modal-title').textContent = record.requestId + ' — ' + record.vendorName;
   document.getElementById('modal-body').innerHTML = renderModalBody(record, mode);
   document.getElementById('modal-overlay').style.display = 'flex';
+  if (document.getElementById('bc-panel')) bcPanelInit(record, mode);
 }
 function closeModal(){ document.getElementById('modal-overlay').style.display = 'none'; modalContext = null; }
 
@@ -3708,6 +3738,8 @@ function baseDetailGrid(record){
       '<div><div class="k">Submitted</div>' + fmtDateTime(record.submittedDate) + '</div>' +
       '<div><div class="k">Vendor</div>' + escapeHtml(record.vendorName) + '</div>' +
       '<div><div class="k">Document number</div>' + escapeHtml(record.invoiceNumber || '—') + '</div>' +
+      (record.poNumbers ? '<div><div class="k">PO / MPO No.</div>' + escapeHtml(record.poNumbers) + '</div>' : '') +
+      (record.bcStatus ? '<div><div class="k">Business Central</div>' + bcStatusPill(record.bcStatus) + '</div>' : '') +
       '<div><div class="k">Document date</div>' + fmtDate(record.invoiceDate) + '</div>' +
       '<div><div class="k">Due date</div>' + fmtDate(record.dueDate) + '</div>' +
       '<div><div class="k">Amount</div>' + fmtAmount(record.amount, record.currency) + '</div>' +
@@ -3927,6 +3959,8 @@ function renderEditDraftForm(record, introHtml){
         '<input class="text-field" type="text" id="ed-vendor" value="' + escapeHtml(record.vendorName) + '"></div>' +
       '<div class="field-row"><label class="field-label">Document Number <span class="req">*</span></label>' +
         '<input class="text-field" type="text" id="ed-invoice-number" value="' + escapeHtml(record.invoiceNumber) + '"></div>' +
+      '<div class="field-row"><label class="field-label">PO / MPO No.</label>' +
+        '<input class="text-field" type="text" id="ed-po-numbers" placeholder="e.g. MPO000123, MPO000124" value="' + escapeHtml(record.poNumbers || '') + '"></div>' +
       '<div class="field-row"><label class="field-label">Payment Terms <span class="req">*</span></label>' +
         '<select class="text-field" id="ed-payment-terms" onchange="refreshDueDate(\'ed\')">' + paymentTermOptionsHtml(record.paymentTerms) + '</select></div>' +
       '<div class="field-row"><label class="field-label">Document Date</label>' +
@@ -3960,6 +3994,7 @@ function readEditDraftForm(){
     department: document.getElementById('ed-department').value,
     vendorName: document.getElementById('ed-vendor').value.trim(),
     invoiceNumber: document.getElementById('ed-invoice-number').value.trim(),
+    poNumbers: normalizePoNumbers(document.getElementById('ed-po-numbers').value),
     paymentTerms: document.getElementById('ed-payment-terms').value.trim(),
     invoiceDate: document.getElementById('ed-invoice-date').value ? new Date(document.getElementById('ed-invoice-date').value).toISOString() : '',
     dueDate: dateInputToIso(document.getElementById('ed-due-date').value),
@@ -4060,6 +4095,7 @@ function renderModalBody(record, mode){
         '<button type="button" class="btn btn-primary" onclick="handleApprovalDecision(\'approve\')">Approve → send to Finance</button>' +
       '</div>';
   }
+  if (bcPanelApplies(record, mode)) html += bcPanelHtml(record, mode);
   if (mode === 'finance') {
     html += '<hr class="section-divider">' +
       paymentRefFieldsHtml('payment-ref', record, true) +
@@ -4545,9 +4581,21 @@ async function handleFinanceDecision(decision){
         patch.historyLog = appendHistory(patch.historyLog, 'Verification set to Not Needed' + (vs ? ' (was ' + vs + ')' : '') + ' on rejection.');
       }
     }
+    // Read the Business Central draft values off the panel before the modal is re-rendered.
+    const bcInputs = decision === 'process' ? bcReadPanelInputs() : null;
     await updateRequestItem(record.id, patch);
     if (decision === 'process') {
       await notifyRequestorOfProcessed(Object.assign({}, record, patch), comment, paymentRef);
+      // Business Central: check the PO / MPO and save the posting details on it as a draft (not posted).
+      let bcMsg = '';
+      if (bcInputs && bcInputs.poNumbers.length) {
+        try { bcMsg = await bcSaveDraft(Object.assign({}, record, patch), bcInputs, true); }
+        catch (e) { bcMsg = 'BC draft not saved: ' + e.message; }
+      }
+      showToast('Finance decision recorded.' + (bcMsg ? ' ' + bcMsg : ''), bcMsg && /not saved|could not|blocked/i.test(bcMsg) ? 'error' : 'success');
+      await refreshAll();
+      openDetail(record.id, 'mine');   // re-open so Finance can review the BC draft and post it
+      return;
     } else if (decision === 'info') {
       await notifyRequestorOfInfoRequest(Object.assign({}, record, patch), comment);
     } else if (decision === 'reject') {
@@ -4765,6 +4813,442 @@ document.getElementById('theme-toggle-btn').addEventListener('click', () => {
   applyTheme(current === 'dark' ? 'light' : 'dark');
 });
 initTheme();
+
+/* =====================================================================
+   Business Central integration (merged in from the BC Portal)
+   ---------------------------------------------------------------------
+   Flow:  Operations submits the request with the PO / MPO -> department approver approves
+          -> Finance opens it: the PO is looked up in BC and checked against the request
+          -> Finance clicks "Mark as processed / paid": the posting details (Posting Date =
+             Document Date, Document Date, Due Date, Payment Terms, Vendor Invoice No.) are
+             saved on the PO in BC, NOT posted (= draft)
+          -> Finance reviews and clicks "Post in BC" (Receive + Invoice). "Recorded in BC"
+             is then ticked automatically.
+   Setup:
+   1. Azure portal > App registrations > "Finance AP Request" > API permissions > Add >
+      Dynamics 365 Business Central > Delegated > Financials.ReadWrite.All > Grant admin consent.
+   2. Optional but recommended: install the small "AP Portal" BC extension (AL files shipped with
+      this page) and set BC_CONFIG.poApi.publisher below. Microsoft's standard API can only set
+      Posting Date and Payment Terms on a PO; the extension adds Vendor Invoice No., Document
+      Date and Due Date, which BC needs before it will post the invoice.
+   3. Add list columns PONumbers, BCStatus (Single line of text) and BCNotes (Multiple lines).
+   ===================================================================== */
+const BC_CONFIG = {
+  environment: 'Production',                 // BC environment name
+  // Which BC company is which entity. Exact names win; otherwise the patterns are used.
+  companyName:  { SG: '', MY: '' },          // e.g. { SG: 'Saxon Renewables Pte. Ltd.', MY: 'Saxon Renewable Energy Sdn Bhd' }
+  companyMatch: { SG: /pte\.?\s*ltd|singapore/i, MY: /sdn\.?\s*bhd|malaysia/i },
+  lcy: { SG: 'SGD', MY: 'MYR' },             // a PO with a blank currency code is in this currency
+  amountTolerance: 0.05,                     // request vs PO amount difference allowed (rounding)
+  poApi: {                                   // the AP Portal extension's API page; blank publisher = not installed
+    publisher: '', group: 'apPortal', version: 'v1.0', entity: 'purchaseOrderHeaders'
+  }
+};
+const BC_SCOPES = ['https://api.businesscentral.dynamics.com/Financials.ReadWrite.All'];
+const BC_ROOT = 'https://api.businesscentral.dynamics.com/v2.0/' + TENANT_ID + '/' + BC_CONFIG.environment + '/api';
+const BC_STATUS = { ISSUES: 'Check found issues', DRAFT: 'Draft saved in BC', POSTED: 'Posted in BC' };
+
+function normalizePoNumbers(v){
+  const seen = [];
+  String(v || '').split(/[,;\s]+/).map(s => s.trim().toUpperCase()).filter(Boolean)
+    .forEach(s => { if (!seen.includes(s)) seen.push(s); });
+  return seen.join(', ');
+}
+function poNumberList(v){ return normalizePoNumbers(v).split(', ').filter(Boolean); }
+/* Older requests have no PO numbers saved — guess them from the attached PO file names. */
+function bcGuessPoNumbers(record){
+  const found = [];
+  parseDocLinks(record.documentLinks).forEach(d => {
+    const name = String(d.name || '').replace(/^PO_/i, '');
+    const m = name.match(/\b(M?PO[A-Z]*[-_]?\d{3,})/i);
+    if (m && !found.includes(m[1].toUpperCase())) found.push(m[1].toUpperCase());
+  });
+  return found.join(', ');
+}
+function bcStatusPill(s){
+  const cls = s === BC_STATUS.POSTED ? 'verify-ok' : s === BC_STATUS.ISSUES ? 'bc-pill-bad' : 'bc-pill-draft';
+  return '<span class="status-pill ' + cls + '">' + escapeHtml(s) + '</span>';
+}
+function termCodeOf(label){ return String(label || '').split(' – ')[0].trim(); }
+
+async function bcFetch(url, options){
+  options = options || {};
+  const token = await getAccessToken(BC_SCOPES);
+  const res = await fetch(url, {
+    method: options.method || 'GET', body: options.body,
+    headers: Object.assign({ 'Authorization': 'Bearer ' + token, 'Accept': 'application/json', 'Content-Type': 'application/json' }, options.headers || {})
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    let msg = text; try { msg = JSON.parse(text).error.message; } catch (e) { /* keep raw */ }
+    const err = new Error('BC ' + res.status + ': ' + String(msg).slice(0, 400)); err.status = res.status; throw err;
+  }
+  if (res.status === 204) return null;
+  const text = await res.text();
+  return text ? JSON.parse(text) : null;
+}
+const bcStd = (companyId, path, options) => bcFetch(BC_ROOT + '/v2.0/companies(' + companyId + ')' + path, options);
+const odataStr = s => "'" + String(s).replace(/'/g, "''") + "'";
+const bcHasExtension = () => !!BC_CONFIG.poApi.publisher;
+function bcExtUrl(companyId, poId){
+  const a = BC_CONFIG.poApi;
+  return BC_ROOT + '/' + a.publisher + '/' + a.group + '/' + a.version + '/companies(' + companyId + ')/' + a.entity + '(' + poId + ')';
+}
+
+let bcCompaniesCache = null;
+function bcEntityOfCompany(display, name){
+  for (const e of Object.keys(BC_CONFIG.companyName)) {
+    const want = BC_CONFIG.companyName[e];
+    if (want && (want === display || want === name)) return e;
+  }
+  for (const e of Object.keys(BC_CONFIG.companyMatch)) {
+    if (BC_CONFIG.companyMatch[e].test(display || '') || BC_CONFIG.companyMatch[e].test(name || '')) return e;
+  }
+  return '';
+}
+async function bcCompanies(){
+  if (bcCompaniesCache) return bcCompaniesCache;
+  const r = await bcFetch(BC_ROOT + '/v2.0/companies');
+  bcCompaniesCache = r.value.map(c => ({ id: c.id, name: c.displayName || c.name, entity: bcEntityOfCompany(c.displayName, c.name) }));
+  return bcCompaniesCache;
+}
+/* Companies to search, the request's own entity first (MYR -> MY, everything else -> SG). */
+async function bcCompanyOrder(record, chosenId){
+  const all = await bcCompanies();
+  if (chosenId) return all.filter(c => c.id === chosenId);
+  const ent = entityForCurrency(record.currency);
+  return all.slice().sort((a, b) => (b.entity === ent) - (a.entity === ent));
+}
+async function bcFindPo(record, poNo, chosenId){
+  let lastErr = null;
+  for (const c of await bcCompanyOrder(record, chosenId)) {
+    try {
+      const r = await bcStd(c.id, '/purchaseOrders?$filter=number eq ' + odataStr(poNo) + '&$expand=purchaseOrderLines');
+      if (r.value.length) return { company: c, po: r.value[0] };
+    } catch (e) { lastErr = e; }   // no access to that company — try the next one
+  }
+  if (lastErr && chosenId) throw lastErr;
+  return null;
+}
+const bcTermsCache = {};
+async function bcTerms(companyId){
+  if (!bcTermsCache[companyId]) bcTermsCache[companyId] = (await bcStd(companyId, '/paymentTerms')).value;
+  return bcTermsCache[companyId];
+}
+
+/* Default draft values for PO number i of a request. Posting Date = the Document (invoice) Date.
+   A second / third PO gets "-2" / "-3" on the Vendor Invoice No., because BC refuses to post two
+   invoices from the same vendor with the same Vendor Invoice No. (editable before saving). */
+function bcDefaultDraft(record, i){
+  const doc = toDateInputValue(record.invoiceDate);
+  return {
+    vendorInvoiceNo: record.invoiceNumber ? (i ? record.invoiceNumber + '-' + (i + 1) : record.invoiceNumber) : '',
+    postingDate: doc, documentDate: doc,
+    dueDate: toDateInputValue(record.dueDate),
+    paymentTermsCode: termCodeOf(record.paymentTerms)
+  };
+}
+
+/* Look up every PO / MPO in BC and compare it with the request. Read-only. */
+async function bcCheck(record, inputs){
+  const results = [];
+  let openTotal = 0;
+  for (let i = 0; i < inputs.poNumbers.length; i++) {
+    const poNo = inputs.poNumbers[i];
+    const r = { poNo, checks: [], blocking: false, draft: inputs.drafts[poNo] || bcDefaultDraft(record, i) };
+    const add = (level, text) => { r.checks.push({ level, text }); if (level === 'bad') r.blocking = true; };
+    results.push(r);
+    let hit;
+    try { hit = await bcFindPo(record, poNo, inputs.companyId); }
+    catch (e) { add('bad', 'Could not search Business Central: ' + e.message); continue; }
+    if (!hit) { add('bad', 'No open purchase order ' + poNo + ' found in ' + (inputs.companyId ? 'the chosen company' : 'any company you can access') + '. It may already be fully posted, or the number is different.'); continue; }
+    const { company, po } = hit;
+    r.company = company; r.po = po;
+    add('ok', 'Found in ' + company.name);
+    const reqEnt = entityForCurrency(record.currency);
+    if (company.entity && company.entity !== reqEnt) add('warn', 'The PO is in the ' + company.entity + ' company, but a ' + record.currency + ' request is normally ' + reqEnt + '.');
+
+    if (po.status === 'In Review') add('bad', 'The PO is "In Review" (pending a BC approval) — it can\'t be changed or posted until that is approved or cancelled in BC.');
+    else add('ok', 'BC status: ' + (po.status === 'Draft' ? 'Open' : po.status === 'Open' ? 'Released' : po.status));
+
+    const nv = s => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const a = nv(record.vendorName), b = nv(po.vendorName);
+    if (a && b && (a === b || a.includes(b) || b.includes(a))) add('ok', 'Vendor: ' + po.vendorName + ' (' + po.vendorNumber + ')');
+    else add('warn', 'Vendor in BC is "' + po.vendorName + '" (' + po.vendorNumber + '); the request says "' + record.vendorName + '".');
+
+    r.currency = po.currencyCode || BC_CONFIG.lcy[company.entity] || '';
+    if (!r.currency) add('warn', 'The PO is in local currency, but which one is unknown (set BC_CONFIG.companyName).');
+    else if (r.currency !== record.currency) add('bad', 'Currency: the PO is in ' + r.currency + ', the request is in ' + record.currency + '.');
+    else add('ok', 'Currency: ' + r.currency);
+
+    const lines = (po.purchaseOrderLines || []).filter(l => Number(l.quantity) > 0);
+    let openVal = 0, toReceive = 0;
+    lines.forEach(l => {
+      const q = Number(l.quantity) || 0, inv = Number(l.invoicedQuantity) || 0, rec = Number(l.receivedQuantity) || 0;
+      const amt = Number(l.amountIncludingTax != null ? l.amountIncludingTax : l.netAmountIncludingTax) || 0;
+      if (q) openVal += amt * (q - inv) / q;
+      if (q > rec) toReceive++;
+    });
+    r.openValue = Math.round(openVal * 100) / 100;
+    openTotal += r.openValue;
+    if (!lines.length) add('bad', 'The PO has no lines with a quantity.');
+    else if (r.openValue <= 0.005) add('bad', 'Everything on this PO has already been invoiced.');
+    else add('ok', 'Not yet invoiced: ' + fmtAmount(r.openValue, r.currency) +
+      (toReceive ? ' · ' + toReceive + ' line(s) not yet received — posting will receive and invoice them together' : ' · fully received'));
+
+    const want = r.draft.paymentTermsCode;
+    try {
+      const terms = await bcTerms(company.id);
+      const have = (terms.find(t => t.id === po.paymentTermsId) || {}).code || '';
+      if (want && !terms.some(t => t.code === want)) add('bad', 'Payment terms code ' + want + ' does not exist in ' + company.name + '.');
+      else if (want && have && have !== want) add('warn', 'Payment terms on the PO are ' + have + '; the draft changes them to ' + want + '.');
+      else if (want) add('ok', 'Payment terms: ' + want);
+    } catch (e) { /* not critical */ }
+
+    if (!r.draft.vendorInvoiceNo) add('bad', 'Vendor Invoice No. is empty.');
+    else {
+      if (inputs.poNumbers.some((p, j) => j !== i && (inputs.drafts[p] || bcDefaultDraft(record, j)).vendorInvoiceNo === r.draft.vendorInvoiceNo))
+        add('bad', 'The same Vendor Invoice No. is used on two POs — BC won\'t post both. Make each one different.');
+      try {
+        const d = await bcStd(company.id, '/purchaseInvoices?$filter=vendorNumber eq ' + odataStr(po.vendorNumber) +
+          ' and vendorInvoiceNumber eq ' + odataStr(r.draft.vendorInvoiceNo) + '&$top=1');
+        if (d.value.length) add('bad', 'Vendor Invoice No. ' + r.draft.vendorInvoiceNo + ' is already on BC invoice ' + d.value[0].number + ' (' + d.value[0].status + ') for this vendor — possible duplicate.');
+      } catch (e) { /* not critical */ }
+    }
+    if (!r.draft.postingDate) add('bad', 'Posting Date is empty (the request has no Document Date) — enter it below.');
+  }
+  const out = { results, openTotal, amountNote: '' };
+  if (results.length && results.every(r => r.po)) {
+    const reqAmt = Number(record.amount) || 0;
+    if (Math.abs(openTotal - reqAmt) > BC_CONFIG.amountTolerance) {
+      out.amountNote = 'Amount: the request is ' + fmtAmount(reqAmt, record.currency) + ', but the not-yet-invoiced amount on the PO(s) is ' +
+        fmtAmount(openTotal, record.currency) + '. Posting from here invoices everything still open, so for a partial invoice set Qty. to Invoice in BC and post there.';
+    } else {
+      results[0].checks.push({ level: 'ok', text: 'Amount matches the request: ' + fmtAmount(reqAmt, record.currency) });
+    }
+  }
+  out.blocking = results.some(r => r.blocking);
+  return out;
+}
+
+/* Write the draft values onto one PO header. Nothing is posted. */
+async function bcWriteDraft(r){
+  const d = r.draft, cid = r.company.id;
+  if (bcHasExtension()) {
+    const url = bcExtUrl(cid, r.po.id);
+    const patch = body => bcFetch(url, { method: 'PATCH', headers: { 'If-Match': '*' }, body: JSON.stringify(body) });
+    // One field at a time, in this order: BC recalculates Document Date from Posting Date and
+    // Due Date from Payment Terms + Document Date, so the explicit values have to go in last.
+    await patch({ postingDate: d.postingDate });
+    if (d.documentDate) await patch({ documentDate: d.documentDate });
+    if (d.paymentTermsCode) await patch({ paymentTermsCode: d.paymentTermsCode });
+    if (d.dueDate) await patch({ dueDate: d.dueDate });
+    await patch({ vendorInvoiceNo: d.vendorInvoiceNo });
+  } else {
+    const body = { postingDate: d.postingDate };
+    if (d.paymentTermsCode) {
+      const t = (await bcTerms(cid)).find(x => x.code === d.paymentTermsCode);
+      if (t) body.paymentTermsId = t.id;
+    }
+    await bcStd(cid, '/purchaseOrders(' + r.po.id + ')', { method: 'PATCH', headers: { 'If-Match': '*' }, body: JSON.stringify(body) });
+  }
+}
+function bcDraftSummary(r){
+  const d = r.draft;
+  return r.poNo + ' (' + (r.company ? r.company.name : '?') + '): Vendor Inv ' + d.vendorInvoiceNo + ', Posting ' + d.postingDate +
+    ', Doc ' + (d.documentDate || '-') + ', Due ' + (d.dueDate || '-') + ', Terms ' + (d.paymentTermsCode || '-');
+}
+
+/* Save the BC status on the SharePoint request (history uses whichever copy of the record is newest). */
+async function bcRecordStatus(record, status, notes, historyLine, extra){
+  const cached = findRecord(record.id) || record;
+  const base = String(record.historyLog || '').length >= String(cached.historyLog || '').length ? record : cached;
+  const patch = Object.assign({ bcStatus: status, bcNotes: notes, historyLog: appendHistory(base.historyLog, historyLine) }, extra || {});
+  await updateRequestItem(record.id, patch);
+  Object.assign(record, patch);
+}
+
+/* Check, then save the draft on every PO. Returns a short message for a toast. */
+async function bcSaveDraft(record, inputs, auto){
+  const chk = await bcCheck(record, inputs);
+  bcRenderResults(chk);
+  const poNumbers = inputs.poNumbers.join(', ');
+  const who = currentAccount.username + (auto ? ' (auto, on processing)' : '');
+  if (chk.blocking) {
+    const issues = chk.results.map(r => r.checks.filter(c => c.level === 'bad').map(c => r.poNo + ': ' + c.text).join('\n')).filter(Boolean).join('\n');
+    await bcRecordStatus(record, BC_STATUS.ISSUES, issues, who + ': BC check found issues — draft not saved.', { poNumbers });
+    return 'BC draft not saved — the BC check found issues (see the Business Central section).';
+  }
+  const done = [];
+  for (const r of chk.results) {
+    try { await bcWriteDraft(r); done.push(r); }
+    catch (e) {
+      const note = done.map(bcDraftSummary).concat([r.poNo + ': ' + e.message]).join('\n');
+      await bcRecordStatus(record, BC_STATUS.ISSUES, note, who + ': could not save BC draft on ' + r.poNo + ' — ' + e.message, { poNumbers });
+      return 'BC draft not saved on ' + r.poNo + ': ' + e.message;
+    }
+  }
+  const notes = done.map(bcDraftSummary).join('\n') + (bcHasExtension() ? '' : '\nVendor Invoice No., Document Date and Due Date still to be entered in BC (AP Portal extension not installed).');
+  await bcRecordStatus(record, BC_STATUS.DRAFT, notes, who + ' saved posting details on ' + poNumbers + ' in BC (draft, not posted).', { poNumbers });
+  return bcHasExtension()
+    ? 'Posting details saved on ' + poNumbers + ' in BC as a draft — review and click Post in BC.'
+    : 'Posting Date and Payment Terms saved on ' + poNumbers + ' in BC. Enter Vendor Invoice No., Document Date and Due Date in BC before posting.';
+}
+
+/* Receive + invoice every PO in BC (the same action as the BC Portal's Receive / Invoice buttons, in one go). */
+async function bcPost(record, inputs, btn){
+  const chk = await bcCheck(record, inputs);
+  bcRenderResults(chk);
+  if (chk.blocking) throw new Error('fix the issues shown in the Business Central section first');
+  if (chk.amountNote) throw new Error('the request amount doesn\'t match what is still open on the PO(s) — post this one from BC');
+  const list = chk.results.map(r => r.poNo + ' — ' + fmtAmount(r.openValue, r.currency)).join('\n');
+  if (!confirm('Post to Business Central?\n\n' + list + '\n\nThis receives anything not yet received and posts the purchase invoice (payables, tax, G/L). It cannot be undone from this app.')) return null;
+  const posted = [];
+  for (const r of chk.results) {
+    btn.textContent = 'Posting ' + r.poNo + '…';
+    try {
+      await bcWriteDraft(r);   // make sure the latest values are on the PO
+      for (const l of (r.po.purchaseOrderLines || []).filter(x => Number(x.quantity) > 0)) {
+        const q = Number(l.quantity) || 0, rec = Number(l.receivedQuantity) || 0, inv = Number(l.invoicedQuantity) || 0;
+        const url = '/purchaseOrders(' + r.po.id + ')/purchaseOrderLines(' + l.id + ')';
+        // separate PATCHes: setting Qty. to Receive makes BC recalculate Qty. to Invoice
+        await bcStd(r.company.id, url, { method: 'PATCH', headers: { 'If-Match': '*' }, body: JSON.stringify({ receiveQuantity: q - rec }) });
+        await bcStd(r.company.id, url, { method: 'PATCH', headers: { 'If-Match': '*' }, body: JSON.stringify({ invoiceQuantity: q - inv }) });
+      }
+      await bcStd(r.company.id, '/purchaseOrders(' + r.po.id + ')/Microsoft.NAV.receiveAndInvoice', { method: 'POST', headers: { 'If-Match': '*' }, body: '{}' });
+      posted.push(r.poNo);
+    } catch (e) {
+      const note = (posted.length ? 'Posted: ' + posted.join(', ') + '\n' : '') + 'Failed on ' + r.poNo + ': ' + e.message;
+      await bcRecordStatus(record, posted.length ? BC_STATUS.DRAFT : record.bcStatus || BC_STATUS.DRAFT, note,
+        currentAccount.username + ' tried to post to BC' + (posted.length ? ' — posted ' + posted.join(', ') + ', ' : ' — ') + 'failed on ' + r.poNo + ': ' + e.message);
+      throw new Error((posted.length ? posted.join(', ') + ' posted, but ' : '') + r.poNo + ' failed: ' + e.message);
+    }
+  }
+  const now = nowIso();
+  await bcRecordStatus(record, BC_STATUS.POSTED, chk.results.map(bcDraftSummary).join('\n'),
+    currentAccount.username + ' posted ' + posted.join(', ') + ' in BC (received and invoiced). Marked as recorded in BC.',
+    { bcRecorded: true, bcRecordedBy: currentAccount.username, bcRecordedDate: now, poNumbers: inputs.poNumbers.join(', ') });
+  return 'Posted ' + posted.join(', ') + ' in Business Central.';
+}
+
+/* ---- the Business Central section in the request modal (Finance only) ---- */
+function bcPanelApplies(record, mode){
+  if (!isFinanceUser()) return false;
+  return mode === 'finance' || (mode === 'mine' && record.status === STATUS.PROCESSED);
+}
+function bcPanelHtml(record, mode){
+  const pos = record.poNumbers || bcGuessPoNumbers(record);
+  const posted = record.bcStatus === BC_STATUS.POSTED;
+  const intro = mode === 'finance'
+    ? 'The PO / MPO is checked against BC below. When you click <strong>Mark as processed / paid</strong>, the posting details are saved on the PO in BC as a <strong>draft (not posted)</strong>; you then post it from here.'
+    : posted ? 'This request has been posted in Business Central.'
+    : 'Review the details, then <strong>Post in BC</strong> (receives and invoices the PO). Edit a value and click <strong>Save draft in BC</strong> to update the PO without posting.';
+  return '<hr class="section-divider"><div id="bc-panel" class="bc-panel">' +
+    '<div class="bc-head"><strong>Business Central</strong>' + (record.bcStatus ? ' ' + bcStatusPill(record.bcStatus) : '') + '</div>' +
+    '<div class="muted small" style="margin-bottom:10px;">' + intro + '</div>' +
+    '<div class="grid-2">' +
+      '<div class="field-row"><label class="field-label">PO / MPO No.</label>' +
+        '<input class="text-field" type="text" id="bc-po-numbers" value="' + escapeHtml(pos) + '" placeholder="e.g. MPO000123">' +
+        (!record.poNumbers && pos ? '<div class="field-hint">Guessed from the attached PO file name — please confirm.</div>' : '') + '</div>' +
+      '<div class="field-row"><label class="field-label">BC company</label>' +
+        '<select class="text-field" id="bc-company"><option value="">Auto (by currency)</option></select></div>' +
+    '</div>' +
+    (posted ? '' :
+      '<div class="btn-row" style="justify-content:flex-start; margin-top:4px;">' +
+        '<button type="button" class="btn btn-ghost" id="bc-btn-check" onclick="bcHandleCheck()">Check in BC</button>' +
+        (mode === 'finance' ? '' :
+          '<button type="button" class="btn btn-ghost" id="bc-btn-draft" onclick="bcHandleSaveDraft()">Save draft in BC</button>' +
+          '<button type="button" class="btn btn-primary" id="bc-btn-post" onclick="bcHandlePost()">Post in BC</button>') +
+      '</div>') +
+    '<div id="bc-results"></div>' +
+    (record.bcNotes ? '<div class="field-hint" style="white-space:pre-wrap; margin-top:8px;"><strong>Last BC note:</strong> ' + escapeHtml(record.bcNotes) + '</div>' : '') +
+  '</div>';
+}
+async function bcPanelInit(record, mode){
+  const sel = document.getElementById('bc-company');
+  try {
+    const comps = await bcCompanies();
+    if (sel && document.body.contains(sel)) comps.forEach(c => sel.add(new Option(c.name + (c.entity ? ' (' + c.entity + ')' : ''), c.id)));
+  } catch (e) {
+    const box = document.getElementById('bc-results');
+    if (box) box.innerHTML = '<div class="bc-note bad">Could not connect to Business Central: ' + escapeHtml(e.message) +
+      '<br>Check that the app registration has the Business Central permission (see the setup notes in the page source).</div>';
+    return;
+  }
+  if (record.bcStatus !== BC_STATUS.POSTED && poNumberList(document.getElementById('bc-po-numbers').value).length) bcHandleCheck(true);
+}
+function bcReadPanelInputs(){
+  const poEl = document.getElementById('bc-po-numbers');
+  if (!poEl) return null;
+  const drafts = {};
+  document.querySelectorAll('#bc-results .bc-draft').forEach(box => {
+    const v = k => (box.querySelector('[data-k="' + k + '"]') || {}).value || '';
+    drafts[box.dataset.po] = { vendorInvoiceNo: v('vendorInvoiceNo').trim(), postingDate: v('postingDate'), documentDate: v('documentDate'),
+      dueDate: v('dueDate'), paymentTermsCode: v('paymentTermsCode').trim().toUpperCase() };
+  });
+  return { poNumbers: poNumberList(poEl.value), companyId: document.getElementById('bc-company').value, drafts };
+}
+function bcRenderResults(chk){
+  const box = document.getElementById('bc-results');
+  if (!box) return;
+  const icon = { ok: '✓', warn: '!', bad: '✕' };
+  const ext = bcHasExtension();
+  const field = (r, k, label, type, onlyExt) =>
+    '<label class="bc-field">' + label + (onlyExt && !ext ? ' <span class="muted">(enter in BC)</span>' : '') +
+    '<input class="text-field" type="' + type + '" data-k="' + k + '" value="' + escapeHtml(r.draft[k] || '') + '"' + (onlyExt && !ext ? ' disabled' : '') + '></label>';
+  box.innerHTML = chk.results.map(r =>
+    '<div class="bc-po">' +
+      '<div class="bc-po-title">' + escapeHtml(r.poNo) + (r.po ? ' <span class="muted small">· ' + escapeHtml(r.company.name) + ' · PO total ' + fmtAmount(r.po.totalAmountIncludingTax, r.currency) + '</span>' : '') + '</div>' +
+      '<ul class="bc-checks">' + r.checks.map(c => '<li class="' + c.level + '"><span class="bc-ic">' + icon[c.level] + '</span>' + escapeHtml(c.text) + '</li>').join('') + '</ul>' +
+      (r.po ? '<div class="bc-draft" data-po="' + escapeHtml(r.poNo) + '">' +
+        field(r, 'vendorInvoiceNo', 'Vendor Invoice No.', 'text', true) +
+        field(r, 'postingDate', 'Posting Date', 'date', false) +
+        field(r, 'documentDate', 'Document Date', 'date', true) +
+        field(r, 'dueDate', 'Due Date', 'date', true) +
+        field(r, 'paymentTermsCode', 'Payment Terms', 'text', false) +
+      '</div>' : '') +
+    '</div>').join('') +
+    (chk.amountNote ? '<div class="bc-note warn">' + escapeHtml(chk.amountNote) + '</div>' : '') +
+    (!ext ? '<div class="bc-note">Standard BC API: only Posting Date and Payment Terms can be written. Install the AP Portal extension to also fill Vendor Invoice No., Document Date and Due Date.</div>' : '');
+}
+async function bcHandleCheck(silent){
+  const record = modalContext && modalContext.record;
+  const inputs = bcReadPanelInputs();
+  if (!record || !inputs) return;
+  if (!inputs.poNumbers.length) { if (!silent) showToast('Enter the PO / MPO number first.', 'error'); return; }
+  const btn = document.getElementById('bc-btn-check');
+  const box = document.getElementById('bc-results');
+  if (btn) setBusy(btn, true, 'Checking…');
+  if (box && !box.innerHTML) box.innerHTML = '<div class="muted small">Checking in Business Central…</div>';
+  try { bcRenderResults(await bcCheck(record, inputs)); }
+  catch (e) { if (box) box.innerHTML = '<div class="bc-note bad">' + escapeHtml(e.message) + '</div>'; }
+  if (btn) setBusy(btn, false);
+}
+async function bcHandleSaveDraft(){
+  const record = modalContext && modalContext.record;
+  const inputs = bcReadPanelInputs();
+  if (!record || !inputs || !inputs.poNumbers.length) { showToast('Enter the PO / MPO number first.', 'error'); return; }
+  const btn = document.getElementById('bc-btn-draft');
+  setBusy(btn, true, 'Saving…');
+  let msg = '';
+  try { msg = await bcSaveDraft(record, inputs, false); }
+  catch (e) { showToast('Could not save the BC draft: ' + e.message, 'error'); }
+  setBusy(btn, false);
+  if (msg) { showToast(msg, /not saved/i.test(msg) ? 'error' : 'success'); await refreshAll(); openDetail(record.id, 'mine'); }
+}
+async function bcHandlePost(){
+  const record = modalContext && modalContext.record;
+  const inputs = bcReadPanelInputs();
+  if (!record || !inputs || !inputs.poNumbers.length) { showToast('Enter the PO / MPO number first.', 'error'); return; }
+  const btn = document.getElementById('bc-btn-post');
+  setBusy(btn, true, 'Posting…');
+  let msg = null, failed = false;
+  try { msg = await bcPost(record, inputs, btn); }
+  catch (e) { failed = true; showToast('Could not post to BC: ' + e.message, 'error'); }
+  setBusy(btn, false);
+  if (msg) showToast(msg, 'success');
+  if (msg || failed) { await refreshAll(); openDetail(record.id, 'mine'); }   // show the saved BC status / note
+}
 
 (async function init(){
   await msalReady;
