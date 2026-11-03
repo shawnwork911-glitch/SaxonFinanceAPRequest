@@ -4908,9 +4908,9 @@ initTheme();
    ---------------------------------------------------------------------
    Flow:  Operations submits the request with the PO / MPO -> department approver approves
           -> Finance opens it: the PO is looked up in BC and checked against the request
-          -> Finance clicks "Mark as processed / paid": the posting details (Posting Date =
-             Document Date, Document Date, Due Date, Payment Terms, Vendor Invoice No.) are
-             saved on the PO in BC, NOT posted (= draft)
+          -> Finance clicks "Mark as processed / paid": Vendor Invoice No. (= request's Document
+             Number), Posting Date and Document Date (= request's Document Date) are saved on each
+             PO in BC, NOT posted (= draft). All can change on a Released PO; no reopen needed.
           -> Finance posts the PO(s) manually in BC, then ticks "Recorded in BC" here
              (which hides the Business Central section on that request).
    Several PO / MPO numbers on one request are each checked and drafted separately.
@@ -5049,11 +5049,12 @@ async function bcTerms(companyId){
    invoices from the same vendor with the same Vendor Invoice No. (editable before saving). */
 function bcDefaultDraft(record, i){
   const doc = toDateInputValue(record.invoiceDate);
+  // Finance sets Posting Date, Document Date and Vendor Invoice No. from here (all editable on a
+  // Released PO). A second / third PO gets "-2" / "-3" on the Vendor Invoice No., because BC refuses
+  // to post two invoices from the same vendor with the same Vendor Invoice No. (editable).
   return {
-    vendorInvoiceNo: record.invoiceNumber ? (i ? record.invoiceNumber + '-' + (i + 1) : record.invoiceNumber) : '',
     postingDate: doc, documentDate: doc,
-    dueDate: toDateInputValue(record.dueDate),
-    paymentTermsCode: termCodeOf(record.paymentTerms)
+    vendorInvoiceNo: record.invoiceNumber ? (i ? record.invoiceNumber + '-' + (i + 1) : record.invoiceNumber) : ''
   };
 }
 
@@ -5109,13 +5110,13 @@ async function bcCheck(record, inputs){
     else add('ok', 'Not yet invoiced: ' + fmtAmount(r.openValue, r.currency) +
       (toReceive ? ' · ' + toReceive + ' line(s) not yet received — posting will receive and invoice them together' : ' · fully received'));
 
-    const want = r.draft.paymentTermsCode;
+    // Payment terms: information only (the app doesn't change them).
+    const want = termCodeOf(record.paymentTerms);
     try {
       const terms = await bcTerms(company.id);
       const have = (terms.find(t => t.id === po.paymentTermsId) || {}).code || '';
-      if (want && !terms.some(t => t.code === want)) add('bad', 'Payment terms code ' + want + ' does not exist in ' + company.name + '.');
-      else if (want && have && have !== want) add('warn', 'Payment terms on the PO are ' + have + '; the draft changes them to ' + want + '.');
-      else if (want) add('ok', 'Payment terms: ' + want);
+      if (want && have && have !== want) add('warn', 'Payment terms on the PO are ' + have + '; the request says ' + want + '.');
+      else if (have) add('ok', 'Payment terms: ' + have);
     } catch (e) { /* not critical */ }
 
     if (!r.draft.vendorInvoiceNo) add('bad', 'Vendor Invoice No. is empty.');
@@ -5146,53 +5147,27 @@ async function bcCheck(record, inputs){
 }
 
 /* Write the draft values onto one PO header. Nothing is posted. */
+/* Write Posting Date, Document Date and Vendor Invoice No. onto one PO (all can change on a Released PO).
+   Only values that differ are sent. Nothing is posted. */
 async function bcWriteDraft(r){
   const d = r.draft, cid = r.company.id;
   if (bcHasExtension()) {
     const url = bcExtUrl(cid, r.po.id);
-    const patch = body => bcFetch(url, { method: 'PATCH', headers: { 'If-Match': '*' }, body: JSON.stringify(body) });
-    const action = name => bcFetch(url + '/Microsoft.NAV.' + name, { method: 'POST', headers: { 'If-Match': '*' }, body: '{}' });
-    const isStatusErr = e => /Status must be equal to 'Open'/i.test(e && e.message || '');
-    // Only send fields that actually change: anything left untouched can't trip BC's checks.
-    // Order matters: BC recalculates Document Date from Posting Date and Due Date from
-    // Payment Terms + Document Date, so the explicit values go in last.
-    const writeChanged = async () => {
-      const cur = await bcFetch(url);
-      const steps = [['postingDate', d.postingDate], ['documentDate', d.documentDate], ['paymentTermsCode', d.paymentTermsCode],
-                     ['dueDate', d.dueDate], ['vendorInvoiceNo', d.vendorInvoiceNo]];
-      for (const [k, v] of steps) {
-        if (!v) continue;
-        const now = await bcFetch(url);   // re-read: an earlier field may have recalculated this one
-        if (String(now[k] || '') === String(v)) continue;
-        await patch({ [k]: v });
-      }
-      return cur;
-    };
-    // 1) Write straight onto the PO, as you would in BC. Most fields can change on a Released PO.
-    try { await writeChanged(); return; }
-    catch (e) { if (!isStatusErr(e)) throw e; }
-    // 2) BC insisted the PO be Open for one of the changes (typically the Posting Date on a
-    //    foreign-currency PO, which recalculates the exchange rate on the lines). Reopen, write, release again.
-    try { await action('reopen'); }
-    catch (e) { throw new Error('BC requires the PO to be Open for this change, and it could not be reopened automatically (' + e.message + '). Reopen it in BC, click Save draft in BC again, then Release it — or install AP Portal extension 1.0.0.1.'); }
-    let writeErr = null;
-    try { await writeChanged(); } catch (e) { writeErr = e; }
-    try { await action('release'); }
-    catch (e) { throw new Error((writeErr ? writeErr.message + ' Also, ' : '') + 'the PO was left Open — release it again in BC (' + e.message + ')'); }
-    if (writeErr) throw writeErr;
-  } else {
-    const body = { postingDate: d.postingDate };
-    if (d.paymentTermsCode) {
-      const t = (await bcTerms(cid)).find(x => x.code === d.paymentTermsCode);
-      if (t) body.paymentTermsId = t.id;
+    // Posting Date first: BC may copy it into Document Date, so the explicit Document Date comes after.
+    for (const k of ['postingDate', 'documentDate', 'vendorInvoiceNo']) {
+      if (!d[k]) continue;
+      const now = await bcFetch(url);
+      if (String(now[k] || '') === String(d[k])) continue;
+      await bcFetch(url, { method: 'PATCH', headers: { 'If-Match': '*' }, body: JSON.stringify({ [k]: d[k] }) });
     }
-    await bcStd(cid, '/purchaseOrders(' + r.po.id + ')', { method: 'PATCH', headers: { 'If-Match': '*' }, body: JSON.stringify(body) });
+  } else {
+    if (String(r.po.postingDate || '') === String(d.postingDate)) return;
+    await bcStd(cid, '/purchaseOrders(' + r.po.id + ')', { method: 'PATCH', headers: { 'If-Match': '*' }, body: JSON.stringify({ postingDate: d.postingDate }) });
   }
 }
 function bcDraftSummary(r){
   const d = r.draft;
-  return r.poNo + ' (' + (r.company ? r.company.name : '?') + '): Vendor Inv ' + d.vendorInvoiceNo + ', Posting ' + d.postingDate +
-    ', Doc ' + (d.documentDate || '-') + ', Due ' + (d.dueDate || '-') + ', Terms ' + (d.paymentTermsCode || '-');
+  return r.poNo + ' (' + (r.company ? r.company.name : '?') + '): Vendor Invoice No. ' + d.vendorInvoiceNo + ', Posting Date ' + d.postingDate + ', Document Date ' + (d.documentDate || '-');
 }
 
 /* Save the BC status on the SharePoint request (history uses whichever copy of the record is newest). */
@@ -5217,7 +5192,7 @@ async function bcSaveDraft(record, inputs, auto){
     try { await bcWriteDraft(r); saved.push(r); }
     catch (e) { failed.push(r.poNo + ': ' + e.message); }
   }
-  const extNote = bcHasExtension() ? '' : '\nVendor Invoice No., Document Date and Due Date still to be entered in BC (AP Portal extension not installed).';
+  const extNote = bcHasExtension() ? '' : '\nVendor Invoice No. and Document Date still to be entered in BC (AP Portal extension not installed).';
   const notes = (saved.length ? 'Draft saved:\n' + saved.map(bcDraftSummary).join('\n') : '') +
     (failed.length ? (saved.length ? '\n' : '') + 'Not saved:\n' + failed.join('\n') : '') + (saved.length ? extNote : '');
   const status = failed.length ? BC_STATUS.ISSUES : BC_STATUS.DRAFT;
@@ -5229,8 +5204,8 @@ async function bcSaveDraft(record, inputs, auto){
   if (!saved.length) return 'BC draft not saved — the BC check found issues (see the Business Central section).';
   if (failed.length) return 'BC draft saved on ' + saved.length + ' of ' + total + ' PO(s); ' + failed.length + ' not saved because of issues (see the Business Central section).';
   return bcHasExtension()
-    ? 'Posting details saved as a draft on ' + (total > 1 ? 'all ' + total + ' POs' : poNumbers) + ' in BC. Post them in BC, then tick "Recorded in BC".'
-    : 'Posting Date and Payment Terms saved on ' + (total > 1 ? 'all ' + total + ' POs' : poNumbers) + ' in BC. Enter Vendor Invoice No., Document Date and Due Date in BC, post, then tick "Recorded in BC".';
+    ? 'Vendor Invoice No., Posting Date and Document Date saved on ' + (total > 1 ? 'all ' + total + ' POs' : poNumbers) + ' in BC (not posted). Post in BC, then tick "Recorded in BC".'
+    : 'Posting Date saved on ' + (total > 1 ? 'all ' + total + ' POs' : poNumbers) + ' in BC (not posted). Set the Vendor Invoice No. and Document Date in BC, post, then tick "Recorded in BC".';
 }
 
 /* ---- the Business Central section in the request modal (Finance only) ---- */
@@ -5280,8 +5255,7 @@ function bcReadPanelInputs(){
   const drafts = {};
   document.querySelectorAll('#bc-results .bc-draft').forEach(box => {
     const v = k => (box.querySelector('[data-k="' + k + '"]') || {}).value || '';
-    drafts[box.dataset.po] = { vendorInvoiceNo: v('vendorInvoiceNo').trim(), postingDate: v('postingDate'), documentDate: v('documentDate'),
-      dueDate: v('dueDate'), paymentTermsCode: v('paymentTermsCode').trim().toUpperCase() };
+    drafts[box.dataset.po] = { vendorInvoiceNo: v('vendorInvoiceNo').trim(), postingDate: v('postingDate'), documentDate: v('documentDate') };
   });
   return { poNumbers: poNumberList(poEl.value), companyId: '', drafts };
 }
@@ -5306,13 +5280,11 @@ function bcRenderResults(chk){
         field(r, 'vendorInvoiceNo', 'Vendor Invoice No.', 'text', true) +
         field(r, 'postingDate', 'Posting Date', 'date', false) +
         field(r, 'documentDate', 'Document Date', 'date', true) +
-        field(r, 'dueDate', 'Due Date', 'date', true) +
-        field(r, 'paymentTermsCode', 'Payment Terms', 'text', false) +
       '</div>' : '') +
     '</div>').join('') +
     (chk.amountNote ? '<div class="bc-note warn">' + escapeHtml(chk.amountNote) + '</div>' : '') +
     (chk.amountOk ? '<div class="bc-note ok">\u2713 ' + escapeHtml(chk.amountOk) + '</div>' : '') +
-    (!ext ? '<div class="bc-note">Standard BC API: only Posting Date and Payment Terms can be written. Install the AP Portal extension to also fill Vendor Invoice No., Document Date and Due Date.</div>' : '');
+    (!ext ? '<div class="bc-note">Standard BC API: only the Posting Date can be written. Install the AP Portal extension to also set the Vendor Invoice No. and Document Date.</div>' : '');
 }
 async function bcHandleCheck(silent){
   const record = modalContext && modalContext.record;
