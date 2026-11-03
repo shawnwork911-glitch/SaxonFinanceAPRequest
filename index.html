@@ -625,6 +625,15 @@ html.desk-nav-hidden #tabs{transform:translateX(-100%);visibility:hidden;}
     background: transparent; color: var(--ink); font-family: inherit; cursor: pointer; position: relative;
   }
   .np-item:hover { background: var(--surface-2, var(--paper)); }
+  .np-row { position: relative; }
+  .np-row .np-item { padding-right: 34px; }
+  .np-x {
+    position: absolute; top: 6px; right: 6px; width: 24px; height: 24px; padding: 0; border: none; border-radius: 6px;
+    background: transparent; color: var(--sub); font-size: 12px; cursor: pointer; opacity: .55;
+  }
+  .np-row:hover .np-x, .np-x:focus-visible { opacity: 1; }
+  .np-x:hover { background: var(--line); color: var(--ink); }
+  .np-head span { display: flex; gap: 4px; }
   .np-item.unread { background: var(--glow, var(--accent-light)); }
   .np-item.unread::before { content: ''; position: absolute; left: 4px; top: 15px; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
   .np-item.action .np-text { font-weight: 700; }
@@ -669,7 +678,7 @@ html.desk-nav-hidden #tabs{transform:translateX(-100%);visibility:hidden;}
     <div class="pop-wrap">
       <button type="button" id="notif-btn" class="icon-btn" title="Notifications" aria-haspopup="true" aria-expanded="false" onclick="togglePop('notif-panel', event)">&#128276;<span id="notif-count" class="notif-count" hidden></span></button>
       <div id="notif-panel" class="pop-panel notif-panel" hidden>
-        <div class="np-head"><strong>Notifications</strong><button type="button" class="np-markall" onclick="markAllNotificationsRead()">Mark all as read</button></div>
+        <div class="np-head"><strong>Notifications</strong><span><button type="button" class="np-markall" onclick="markAllNotificationsRead()">Mark all as read</button><button type="button" class="np-markall" onclick="clearAllNotifications()">Clear all</button></span></div>
         <div id="notif-list"></div>
       </div>
     </div>
@@ -5142,13 +5151,35 @@ async function bcWriteDraft(r){
   if (bcHasExtension()) {
     const url = bcExtUrl(cid, r.po.id);
     const patch = body => bcFetch(url, { method: 'PATCH', headers: { 'If-Match': '*' }, body: JSON.stringify(body) });
-    // One field at a time, in this order: BC recalculates Document Date from Posting Date and
-    // Due Date from Payment Terms + Document Date, so the explicit values have to go in last.
-    await patch({ postingDate: d.postingDate });
-    if (d.documentDate) await patch({ documentDate: d.documentDate });
-    if (d.paymentTermsCode) await patch({ paymentTermsCode: d.paymentTermsCode });
-    if (d.dueDate) await patch({ dueDate: d.dueDate });
-    await patch({ vendorInvoiceNo: d.vendorInvoiceNo });
+    const action = name => bcFetch(url + '/Microsoft.NAV.' + name, { method: 'POST', headers: { 'If-Match': '*' }, body: '{}' });
+    const isStatusErr = e => /Status must be equal to 'Open'/i.test(e && e.message || '');
+    // Only send fields that actually change: anything left untouched can't trip BC's checks.
+    // Order matters: BC recalculates Document Date from Posting Date and Due Date from
+    // Payment Terms + Document Date, so the explicit values go in last.
+    const writeChanged = async () => {
+      const cur = await bcFetch(url);
+      const steps = [['postingDate', d.postingDate], ['documentDate', d.documentDate], ['paymentTermsCode', d.paymentTermsCode],
+                     ['dueDate', d.dueDate], ['vendorInvoiceNo', d.vendorInvoiceNo]];
+      for (const [k, v] of steps) {
+        if (!v) continue;
+        const now = await bcFetch(url);   // re-read: an earlier field may have recalculated this one
+        if (String(now[k] || '') === String(v)) continue;
+        await patch({ [k]: v });
+      }
+      return cur;
+    };
+    // 1) Write straight onto the PO, as you would in BC. Most fields can change on a Released PO.
+    try { await writeChanged(); return; }
+    catch (e) { if (!isStatusErr(e)) throw e; }
+    // 2) BC insisted the PO be Open for one of the changes (typically the Posting Date on a
+    //    foreign-currency PO, which recalculates the exchange rate on the lines). Reopen, write, release again.
+    try { await action('reopen'); }
+    catch (e) { throw new Error('BC requires the PO to be Open for this change, and it could not be reopened automatically (' + e.message + '). Reopen it in BC, click Save draft in BC again, then Release it — or install AP Portal extension 1.0.0.1.'); }
+    let writeErr = null;
+    try { await writeChanged(); } catch (e) { writeErr = e; }
+    try { await action('release'); }
+    catch (e) { throw new Error((writeErr ? writeErr.message + ' Also, ' : '') + 'the PO was left Open — release it again in BC (' + e.message + ')'); }
+    if (writeErr) throw writeErr;
   } else {
     const body = { postingDate: d.postingDate };
     if (d.paymentTermsCode) {
@@ -5356,6 +5387,15 @@ function notifSeen(){
 function saveNotifSeen(set){
   try { localStorage.setItem(notifSeenKey(), JSON.stringify([...set].slice(-500))); } catch (e) { /* not critical */ }
 }
+/* Cleared notifications are hidden for good. One comes back only if something new happens on
+   that request (it then has a new date, so a new key). */
+function notifClearedKey(){ return 'ap-notif-cleared:' + myEmail(); }
+function notifCleared(){
+  try { return new Set(JSON.parse(localStorage.getItem(notifClearedKey()) || '[]')); } catch (e) { return new Set(); }
+}
+function saveNotifCleared(set){
+  try { localStorage.setItem(notifClearedKey(), JSON.stringify([...set].slice(-1000))); } catch (e) { /* not critical */ }
+}
 function buildNotifications(){
   const me = myEmail();
   const cutoff = Date.now() - NOTIF_DAYS * 86400000;
@@ -5397,7 +5437,8 @@ function buildNotifications(){
 let currentNotifications = [];
 function renderNotifications(){
   if (!currentAccount) return;
-  currentNotifications = buildNotifications();
+  const cleared = notifCleared();
+  currentNotifications = buildNotifications().filter(n => !cleared.has(n.key));
   const seen = notifSeen();
   const unseen = currentNotifications.filter(n => !seen.has(n.key)).length;
   const badge = document.getElementById('notif-count');
@@ -5406,10 +5447,13 @@ function renderNotifications(){
   document.getElementById('notif-btn').title = unseen ? unseen + ' new notification' + (unseen > 1 ? 's' : '') : 'Notifications';
   document.getElementById('notif-list').innerHTML = currentNotifications.length
     ? currentNotifications.map((n, i) =>
-        '<button type="button" class="np-item' + (seen.has(n.key) ? '' : ' unread') + (n.action ? ' action' : '') + '" onclick="openNotification(' + i + ')">' +
-          '<span class="np-text">' + escapeHtml(n.text) + '</span>' +
-          '<span class="np-sub">' + escapeHtml(n.sub) + (n.ts ? ' · ' + escapeHtml(fmtDateTime(n.ts)) : '') + '</span>' +
-        '</button>').join('')
+        '<div class="np-row">' +
+          '<button type="button" class="np-item' + (seen.has(n.key) ? '' : ' unread') + (n.action ? ' action' : '') + '" onclick="openNotification(' + i + ')">' +
+            '<span class="np-text">' + escapeHtml(n.text) + '</span>' +
+            '<span class="np-sub">' + escapeHtml(n.sub) + (n.ts ? ' · ' + escapeHtml(fmtDateTime(n.ts)) : '') + '</span>' +
+          '</button>' +
+          '<button type="button" class="np-x" title="Clear this notification" aria-label="Clear this notification" onclick="clearNotification(' + i + ', event)">&#10005;</button>' +
+        '</div>').join('')
     : '<div class="np-empty">You\'re all caught up.</div>';
 }
 function openNotification(i){
@@ -5419,6 +5463,19 @@ function openNotification(i){
   closePops();
   renderNotifications();
   openDetail(n.id, n.mode);
+}
+function clearNotification(i, ev){
+  if (ev) ev.stopPropagation();
+  const n = currentNotifications[i];
+  if (!n) return;
+  const cleared = notifCleared(); cleared.add(n.key); saveNotifCleared(cleared);
+  renderNotifications();
+}
+function clearAllNotifications(){
+  const cleared = notifCleared();
+  currentNotifications.forEach(n => cleared.add(n.key));
+  saveNotifCleared(cleared);
+  renderNotifications();
 }
 function markAllNotificationsRead(){
   const seen = notifSeen();
