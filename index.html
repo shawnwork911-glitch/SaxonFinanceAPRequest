@@ -2425,6 +2425,10 @@ async function handleNewFileSelect(e, group){
   e.target.value = '';
   for (const f of picked) newRequestFiles.push(f);
   renderNewFileChips();
+  // Pick up SPO-/MPO- numbers from the attached file names into the PO / MPO No. field (stays editable).
+  const poField = document.getElementById('f-po-numbers');
+  const fromNames = bcGuessPoNumbers({ documentLinks: JSON.stringify(newRequestFiles.map(f => ({ name: f.name }))) });
+  if (poField && fromNames) poField.value = normalizePoNumbers(poField.value + ', ' + fromNames);
 }
 
 /* ---------------------------------------------------------------------
@@ -4855,15 +4859,31 @@ function normalizePoNumbers(v){
   return seen.join(', ');
 }
 function poNumberList(v){ return normalizePoNumbers(v).split(', ').filter(Boolean); }
-/* Older requests have no PO numbers saved — guess them from the attached PO file names. */
+/* Saxon PO numbers: SPO-yymm-nnnn (Singapore) or MPO-yymm-nnnn (Malaysia), e.g. SPO-2610-0009.
+   Picked out of the attached document names (and the description), wherever they appear. */
+const PO_NO_PATTERN = /(?:^|[^A-Z0-9])([SM]PO-\d{4}-\d{4})(?![0-9])/gi;
+/* Older-style numbers: 8 digits straight after "Purchase Order", e.g. "Purchase Order - 26080061".
+   Only taken after those words, so dates and invoice numbers elsewhere in a name are ignored. */
+const PO_NO_PATTERN_8 = /Purchase[\s_-]*Order[\s_\-\u2013\u2014:#.]*(?:No\.?[\s_\-:#]*)?(\d{8})(?![0-9])/gi;
 function bcGuessPoNumbers(record){
   const found = [];
-  parseDocLinks(record.documentLinks).forEach(d => {
-    const name = String(d.name || '').replace(/^PO_/i, '');
-    const m = name.match(/\b(M?PO[A-Z]*[-_]?\d{3,})/i);
-    if (m && !found.includes(m[1].toUpperCase())) found.push(m[1].toUpperCase());
+  const texts = parseDocLinks(record.documentLinks).map(d => String(d.name || '')).concat([String(record.description || '')]);
+  texts.forEach(t => {
+    for (const re of [PO_NO_PATTERN, PO_NO_PATTERN_8]) {
+      for (const m of t.matchAll(re)) {
+        const no = m[1].toUpperCase();
+        if (!found.includes(no)) found.push(no);
+      }
+    }
   });
   return found.join(', ');
+}
+/* SPO -> SG company, MPO -> MY company; anything else -> by currency (MYR -> MY, else SG). */
+function poEntityFor(poNo, record){
+  const p = String(poNo || '').toUpperCase();
+  if (p.startsWith('MPO')) return 'MY';
+  if (p.startsWith('SPO')) return 'SG';
+  return entityForCurrency(record.currency);
 }
 function bcStatusPill(s){
   const cls = s === BC_STATUS.POSTED ? 'verify-ok' : s === BC_STATUS.ISSUES ? 'bc-pill-bad' : 'bc-pill-draft';
@@ -4912,16 +4932,16 @@ async function bcCompanies(){
   bcCompaniesCache = r.value.map(c => ({ id: c.id, name: c.displayName || c.name, entity: bcEntityOfCompany(c.displayName, c.name) }));
   return bcCompaniesCache;
 }
-/* Companies to search, the request's own entity first (MYR -> MY, everything else -> SG). */
-async function bcCompanyOrder(record, chosenId){
+/* Companies to search: the PO's own entity first (SPO -> SG, MPO -> MY), then the rest. */
+async function bcCompanyOrder(record, poNo, chosenId){
   const all = await bcCompanies();
   if (chosenId) return all.filter(c => c.id === chosenId);
-  const ent = entityForCurrency(record.currency);
+  const ent = poEntityFor(poNo, record);
   return all.slice().sort((a, b) => (b.entity === ent) - (a.entity === ent));
 }
 async function bcFindPo(record, poNo, chosenId){
   let lastErr = null;
-  for (const c of await bcCompanyOrder(record, chosenId)) {
+  for (const c of await bcCompanyOrder(record, poNo, chosenId)) {
     try {
       const r = await bcStd(c.id, '/purchaseOrders?$filter=number eq ' + odataStr(poNo) + '&$expand=purchaseOrderLines');
       if (r.value.length) return { company: c, po: r.value[0] };
@@ -4961,12 +4981,12 @@ async function bcCheck(record, inputs){
     let hit;
     try { hit = await bcFindPo(record, poNo, inputs.companyId); }
     catch (e) { add('bad', 'Could not search Business Central: ' + e.message); continue; }
-    if (!hit) { add('bad', 'No open purchase order ' + poNo + ' found in ' + (inputs.companyId ? 'the chosen company' : 'any company you can access') + '. It may already be fully posted, or the number is different.'); continue; }
+    if (!hit) { add('bad', 'No open purchase order ' + poNo + ' found in any BC company you can access. It may already be fully posted, or the number is different.'); continue; }
     const { company, po } = hit;
     r.company = company; r.po = po;
     add('ok', 'Found in ' + company.name);
-    const reqEnt = entityForCurrency(record.currency);
-    if (company.entity && company.entity !== reqEnt) add('warn', 'The PO is in the ' + company.entity + ' company, but a ' + record.currency + ' request is normally ' + reqEnt + '.');
+    const expEnt = poEntityFor(poNo, record);
+    if (company.entity && company.entity !== expEnt) add('warn', 'The PO was found in the ' + company.entity + ' company, but ' + poNo + ' would normally be ' + expEnt + '.');
 
     if (po.status === 'In Review') add('bad', 'The PO is "In Review" (pending a BC approval) — it can\'t be changed or posted until that is approved or cancelled in BC.');
     else add('ok', 'BC status: ' + (po.status === 'Draft' ? 'Open' : po.status === 'Open' ? 'Released' : po.status));
@@ -5146,13 +5166,10 @@ function bcPanelHtml(record, mode){
   return '<hr class="section-divider"><div id="bc-panel" class="bc-panel">' +
     '<div class="bc-head"><strong>Business Central</strong>' + (record.bcStatus ? ' ' + bcStatusPill(record.bcStatus) : '') + '</div>' +
     '<div class="muted small" style="margin-bottom:10px;">' + intro + '</div>' +
-    '<div class="grid-2">' +
-      '<div class="field-row"><label class="field-label">PO / MPO No.</label>' +
-        '<input class="text-field" type="text" id="bc-po-numbers" value="' + escapeHtml(pos) + '" placeholder="e.g. MPO000123">' +
-        (!record.poNumbers && pos ? '<div class="field-hint">Guessed from the attached PO file name — please confirm.</div>' : '') + '</div>' +
-      '<div class="field-row"><label class="field-label">BC company</label>' +
-        '<select class="text-field" id="bc-company"><option value="">Auto (by currency)</option></select></div>' +
-    '</div>' +
+    '<div class="field-row"><label class="field-label">PO / MPO No.</label>' +
+      '<input class="text-field" type="text" id="bc-po-numbers" value="' + escapeHtml(pos) + '" placeholder="e.g. SPO-2610-0009, MPO-2510-1000, 26080061">' +
+      '<div class="field-hint">' + (!record.poNumbers && pos ? 'Detected from the attached document names — edit if needed. ' : '') +
+        'SPO numbers are looked up in the SG company, MPO numbers in the MY company, others by currency. Separate several with commas.</div></div>' +
     (posted ? '' :
       '<div class="btn-row" style="justify-content:flex-start; margin-top:4px;">' +
         '<button type="button" class="btn btn-ghost" id="bc-btn-check" onclick="bcHandleCheck()">Check in BC</button>' +
@@ -5165,10 +5182,8 @@ function bcPanelHtml(record, mode){
   '</div>';
 }
 async function bcPanelInit(record, mode){
-  const sel = document.getElementById('bc-company');
   try {
-    const comps = await bcCompanies();
-    if (sel && document.body.contains(sel)) comps.forEach(c => sel.add(new Option(c.name + (c.entity ? ' (' + c.entity + ')' : ''), c.id)));
+    await bcCompanies();   // confirms the BC connection before checking
   } catch (e) {
     const box = document.getElementById('bc-results');
     if (box) box.innerHTML = '<div class="bc-note bad">Could not connect to Business Central: ' + escapeHtml(e.message) +
@@ -5186,7 +5201,7 @@ function bcReadPanelInputs(){
     drafts[box.dataset.po] = { vendorInvoiceNo: v('vendorInvoiceNo').trim(), postingDate: v('postingDate'), documentDate: v('documentDate'),
       dueDate: v('dueDate'), paymentTermsCode: v('paymentTermsCode').trim().toUpperCase() };
   });
-  return { poNumbers: poNumberList(poEl.value), companyId: document.getElementById('bc-company').value, drafts };
+  return { poNumbers: poNumberList(poEl.value), companyId: '', drafts };
 }
 function bcRenderResults(chk){
   const box = document.getElementById('bc-results');
