@@ -4919,7 +4919,8 @@ initTheme();
    Flow:  Operations submits the request with the PO / MPO -> department approver approves
           -> Finance opens it: the PO is looked up in BC and checked against the request
           -> Finance clicks "Mark as processed / paid": Vendor Invoice No. (= request's Document
-             Number), Posting Date and Document Date (= request's Document Date) are saved on each
+             Number), Posting Date and Document Date (= request's Document Date) and Due Date
+             (Document Date + the PO's payment terms) are saved on each
              PO in BC, NOT posted (= draft). All can change on a Released PO; no reopen needed.
           -> Finance clicks "Post in BC" (a confirmation box lists every detail first; posting
              can't be reverted), or posts in BC and ticks "Recorded in BC". Either way the
@@ -5065,8 +5066,22 @@ function bcDefaultDraft(record, i){
   // to post two invoices from the same vendor with the same Vendor Invoice No. (editable).
   return {
     postingDate: doc, documentDate: doc,
+    dueDate: bcDueDateFor(record, termCodeOf(record.paymentTerms), doc),
     vendorInvoiceNo: record.invoiceNumber ? (i ? record.invoiceNumber + '-' + (i + 1) : record.invoiceNumber) : ''
   };
+}
+/* Due Date = Document Date + payment terms, with the same rules as the request form (calendar days,
+   or business days skipping weekends and SG / MY public holidays). termCode is the PO's BC code
+   (e.g. 30D, INV60). If the terms can't be calculated, fall back to the request's own Due Date. */
+function bcDueDateFor(record, termCode, docDate){
+  let label = '';
+  for (const g of PAYMENT_TERM_GROUPS) {
+    const t = g.terms.find(x => x.code.toUpperCase() === String(termCode || '').toUpperCase());
+    if (t) { label = paymentTermLabel(t); break; }
+  }
+  const calc = label ? calcDueDate(label, docDate, record.currency) : '';
+  if (calc) return calc;
+  return docDate && docDate === toDateInputValue(record.invoiceDate) ? toDateInputValue(record.dueDate) : '';
 }
 
 /* Look up every PO / MPO in BC and compare it with the request. Read-only. */
@@ -5092,7 +5107,7 @@ async function bcCheck(record, inputs){
     // What BC has on the PO right now (shown read-only once the draft has been saved).
     r.current = { postingDate: po.postingDate };
     if (bcHasExtension()) {
-      try { const h = await bcFetch(bcExtUrl(company.id, po.id)); r.current = { postingDate: h.postingDate, documentDate: h.documentDate, vendorInvoiceNo: h.vendorInvoiceNo }; }
+      try { const h = await bcFetch(bcExtUrl(company.id, po.id)); r.current = { postingDate: h.postingDate, documentDate: h.documentDate, dueDate: h.dueDate && h.dueDate !== '0001-01-01' ? h.dueDate : '', vendorInvoiceNo: h.vendorInvoiceNo }; }
       catch (e) { /* not critical */ }
     }
     add('ok', 'Found in ' + company.name);
@@ -5134,7 +5149,11 @@ async function bcCheck(record, inputs){
       const have = (terms.find(t => t.id === po.paymentTermsId) || {}).code || '';
       if (want && have && have !== want) add('warn', 'Payment terms on the PO are ' + have + '; the request says ' + want + '.');
       else if (have) add('ok', 'Payment terms: ' + have);
+      r.termsCode = have || want;
+      // Not edited on screen yet: work the Due Date out from the PO's own payment terms.
+      if (!inputs.drafts[poNo]) r.draft.dueDate = bcDueDateFor(record, r.termsCode, r.draft.documentDate) || r.draft.dueDate;
     } catch (e) { /* not critical */ }
+    if (!r.draft.dueDate) add('bad', 'Due Date is empty — enter it below (BC needs it to post).');
 
     if (!r.draft.vendorInvoiceNo) add('bad', 'Vendor Invoice No. is empty.');
     else {
@@ -5171,7 +5190,8 @@ async function bcWriteDraft(r){
   if (bcHasExtension()) {
     const url = bcExtUrl(cid, r.po.id);
     // Posting Date first: BC may copy it into Document Date, so the explicit Document Date comes after.
-    for (const k of ['postingDate', 'documentDate', 'vendorInvoiceNo']) {
+    // Due Date after Document Date: BC recalculates the Due Date whenever the Document Date changes.
+    for (const k of ['postingDate', 'documentDate', 'dueDate', 'vendorInvoiceNo']) {
       if (!d[k]) continue;
       const now = await bcFetch(url);
       if (String(now[k] || '') === String(d[k])) continue;
@@ -5184,7 +5204,7 @@ async function bcWriteDraft(r){
 }
 function bcDraftSummary(r){
   const d = r.draft;
-  return r.poNo + ' (' + (r.company ? r.company.name : '?') + '): Vendor Invoice No. ' + d.vendorInvoiceNo + ', Posting Date ' + d.postingDate + ', Document Date ' + (d.documentDate || '-');
+  return r.poNo + ' (' + (r.company ? r.company.name : '?') + '): Vendor Invoice No. ' + d.vendorInvoiceNo + ', Posting Date ' + d.postingDate + ', Document Date ' + (d.documentDate || '-') + ', Due Date ' + (d.dueDate || '-');
 }
 
 /* Save the BC status on the SharePoint request (history uses whichever copy of the record is newest). */
@@ -5244,6 +5264,7 @@ async function bcHandlePost(){
   chk.results.forEach(r => {
     if (r.blocking) problems.push(r.poNo + ': ' + r.checks.filter(c => c.level === 'bad').map(c => c.text).join(' '));
     else if (bcHasExtension() && !(r.current && r.current.vendorInvoiceNo)) problems.push(r.poNo + ': Vendor Invoice No. is empty on the PO in BC.');
+    else if (!r.draft.dueDate) problems.push(r.poNo + ': Due Date is empty — enter it in the Business Central section.');
   });
   if (chk.amountNote) problems.push(chk.amountNote + ' Posting from here invoices everything still open on each PO — for a partial invoice, post it in BC.');
   bcShowPostConfirm(record, chk, problems);
@@ -5256,7 +5277,7 @@ function bcShowPostConfirm(record, chk, problems){
     ov.addEventListener('click', e => { if (e.target === ov) bcClosePostConfirm(); });
     document.body.appendChild(ov);
   }
-  const v = (r, k) => (r.current && r.current[k]) || (k === 'postingDate' ? r.po.postingDate : '') || '—';
+  const v = (r, k) => (k === 'dueDate' ? r.draft.dueDate : '') || (r.current && r.current[k]) || (k === 'postingDate' ? r.po.postingDate : '') || '—';
   const total = chk.results.reduce((a, r) => a + (r.openValue || 0), 0);
   const rows = chk.results.filter(r => r.po).map(r =>
     '<tr><td><strong>' + escapeHtml(r.poNo) + '</strong><div class="muted small">' + escapeHtml(r.company.name) + '</div></td>' +
@@ -5264,14 +5285,15 @@ function bcShowPostConfirm(record, chk, problems){
     '<td>' + escapeHtml(v(r, 'vendorInvoiceNo')) + '</td>' +
     '<td>' + escapeHtml(v(r, 'postingDate') === '—' ? '—' : fmtDate(v(r, 'postingDate') + 'T00:00:00')) + '</td>' +
     '<td>' + escapeHtml(v(r, 'documentDate') === '—' ? '—' : fmtDate(v(r, 'documentDate') + 'T00:00:00')) + '</td>' +
+    '<td>' + escapeHtml(v(r, 'dueDate') === '—' ? '—' : fmtDate(v(r, 'dueDate') + 'T00:00:00')) + '</td>' +
     '<td class="num">' + escapeHtml(fmtAmount(r.openValue, r.currency)) + '</td></tr>').join('');
   ov.innerHTML = '<div class="bc-confirm-card" role="dialog" aria-modal="true" aria-labelledby="bc-confirm-title">' +
     '<h3 id="bc-confirm-title">Post to Business Central?</h3>' +
     (problems.length
       ? '<div class="bc-note bad" style="margin-top:8px;"><strong>This can\'t be posted from here yet:</strong><ul>' + problems.map(p => '<li>' + escapeHtml(p) + '</li>').join('') + '</ul>Fix these in BC (or post it in BC directly), then try again.</div>'
       : '<div class="bc-note warn" style="margin-top:8px;"><strong>Please make sure every detail below is correct.</strong> Posting receives anything not yet received and posts the purchase invoice (payables, tax and G/L entries). <strong>Once posted, it cannot be reverted from this app</strong> — a mistake needs a credit memo / corrective document in BC.</div>') +
-    '<div class="bc-confirm-table"><table class="data-table"><thead><tr><th>PO / MPO</th><th>Vendor</th><th>Vendor Invoice No.</th><th>Posting Date</th><th>Document Date</th><th class="num">Amount to invoice</th></tr></thead><tbody>' + rows + '</tbody>' +
-      (chk.results.length > 1 ? '<tfoot><tr><td colspan="5"><strong>Total</strong></td><td class="num"><strong>' + escapeHtml(fmtAmount(total, record.currency)) + '</strong></td></tr></tfoot>' : '') +
+    '<div class="bc-confirm-table"><table class="data-table"><thead><tr><th>PO / MPO</th><th>Vendor</th><th>Vendor Invoice No.</th><th>Posting Date</th><th>Document Date</th><th>Due Date</th><th class="num">Amount to invoice</th></tr></thead><tbody>' + rows + '</tbody>' +
+      (chk.results.length > 1 ? '<tfoot><tr><td colspan="6"><strong>Total</strong></td><td class="num"><strong>' + escapeHtml(fmtAmount(total, record.currency)) + '</strong></td></tr></tfoot>' : '') +
     '</table></div>' +
     '<div class="muted small" style="margin-top:6px;">AP request: ' + escapeHtml(record.requestId || '') + ' · ' + escapeHtml(record.vendorName) + ' · ' + escapeHtml(fmtAmount(record.amount, record.currency)) + '</div>' +
     (problems.length ? '' :
@@ -5298,6 +5320,10 @@ async function bcConfirmPost(){
   for (const r of chk.results) {
     go.textContent = 'Posting ' + r.poNo + '…';
     try {
+      // Write the Due Date onto the PO first (only if it differs from what BC has).
+      if (bcHasExtension() && r.draft.dueDate && r.draft.dueDate !== ((r.current && r.current.dueDate) || '')) {
+        await bcFetch(bcExtUrl(r.company.id, r.po.id), { method: 'PATCH', headers: { 'If-Match': '*' }, body: JSON.stringify({ dueDate: r.draft.dueDate }) });
+      }
       for (const l of (r.po.purchaseOrderLines || []).filter(x => Number(x.quantity) > 0)) {
         const q = Number(l.quantity) || 0, rec = Number(l.receivedQuantity) || 0, inv = Number(l.invoicedQuantity) || 0;
         const url = '/purchaseOrders(' + r.po.id + ')/purchaseOrderLines(' + l.id + ')';
@@ -5310,7 +5336,7 @@ async function bcConfirmPost(){
     } catch (e) { failMsg = r.poNo + ': ' + e.message; break; }
   }
   const summary = posted.map(r => r.poNo + ' (' + r.company.name + '): Vendor Invoice No. ' + ((r.current && r.current.vendorInvoiceNo) || '-') +
-    ', Posting Date ' + ((r.current && r.current.postingDate) || r.po.postingDate || '-') + ', ' + fmtAmount(r.openValue, r.currency)).join('\n');
+    ', Posting Date ' + ((r.current && r.current.postingDate) || r.po.postingDate || '-') + ', Due Date ' + (r.draft.dueDate || '-') + ', ' + fmtAmount(r.openValue, r.currency)).join('\n');
   try {
     if (!failMsg) {
       await bcRecordStatus(record, BC_STATUS.POSTED, 'Posted:\n' + summary,
@@ -5378,7 +5404,7 @@ function bcReadPanelInputs(){
   const drafts = {};
   document.querySelectorAll('#bc-results .bc-draft').forEach(box => {
     const v = k => (box.querySelector('[data-k="' + k + '"]') || {}).value || '';
-    drafts[box.dataset.po] = { vendorInvoiceNo: v('vendorInvoiceNo').trim(), postingDate: v('postingDate'), documentDate: v('documentDate') };
+    drafts[box.dataset.po] = { vendorInvoiceNo: v('vendorInvoiceNo').trim(), postingDate: v('postingDate'), documentDate: v('documentDate'), dueDate: v('dueDate') };
   });
   return { poNumbers: poNumberList(poEl.value), companyId: '', drafts };
 }
@@ -5389,10 +5415,14 @@ function bcRenderResults(chk){
   const ext = bcHasExtension();
   const rec = modalContext && modalContext.record;
   const locked = !!(rec && rec.bcStatus === BC_STATUS.DRAFT && !document.getElementById('bc-btn-draft'));   // draft already saved: show what BC has, read-only
-  const field = (r, k, label, type, onlyExt) => {
-    const val = locked && r.po && r.current && r.current[k] != null ? r.current[k] : r.draft[k];
+  const field = (r, k, label, type, onlyExt, alwaysEditable) => {
+    const fromBC = locked && r.po && r.current && r.current[k] ? r.current[k] : '';
+    const val = fromBC || r.draft[k];
+    const lockThis = locked && !alwaysEditable;
     return '<label class="bc-field">' + label + (onlyExt && !ext ? ' <span class="muted">(enter in BC)</span>' : '') +
-      '<input class="text-field" type="' + type + '" data-k="' + k + '" value="' + escapeHtml(val || '') + '"' + ((onlyExt && !ext) || locked ? ' disabled' : '') + '></label>';
+      '<input class="text-field" type="' + type + '" data-k="' + k + '" value="' + escapeHtml(val || '') + '"' +
+      (k === 'documentDate' ? ' oninput="bcDocDateChanged(this)"' : '') + (k === 'dueDate' ? ' oninput="this.dataset.manual=1"' : '') +
+      ((onlyExt && !ext) || lockThis ? ' disabled' : '') + '></label>';
   };
   const n = chk.results.length, found = chk.results.filter(r => r.po).length, issues = chk.results.filter(r => r.blocking).length;
   const summary = n > 1
@@ -5403,15 +5433,24 @@ function bcRenderResults(chk){
     '<div class="bc-po">' +
       '<div class="bc-po-title">' + escapeHtml(r.poNo) + (r.po ? ' <span class="muted small">· ' + escapeHtml(r.company.name) + ' · PO total ' + fmtAmount(r.po.totalAmountIncludingTax, r.currency) + '</span>' : '') + '</div>' +
       '<ul class="bc-checks">' + r.checks.map(c => '<li class="' + c.level + '"><span class="bc-ic">' + icon[c.level] + '</span>' + escapeHtml(c.text) + '</li>').join('') + '</ul>' +
-      (r.po ? '<div class="bc-draft" data-po="' + escapeHtml(r.poNo) + '">' +
+      (r.po ? '<div class="bc-draft" data-po="' + escapeHtml(r.poNo) + '" data-terms="' + escapeHtml(r.termsCode || '') + '">' +
         field(r, 'vendorInvoiceNo', 'Vendor Invoice No.', 'text', true) +
         field(r, 'postingDate', 'Posting Date', 'date', false) +
         field(r, 'documentDate', 'Document Date', 'date', true) +
+        field(r, 'dueDate', 'Due Date' + (r.termsCode ? ' <span class="muted">(' + escapeHtml(r.termsCode) + ')</span>' : ''), 'date', true, true) +
       '</div>' : '') +
     '</div>').join('') +
     (chk.amountNote ? '<div class="bc-note warn">' + escapeHtml(chk.amountNote) + '</div>' : '') +
     (chk.amountOk ? '<div class="bc-note ok">\u2713 ' + escapeHtml(chk.amountOk) + '</div>' : '') +
     (!ext ? '<div class="bc-note">Standard BC API: only the Posting Date can be written. Install the AP Portal extension to also set the Vendor Invoice No. and Document Date.</div>' : '');
+}
+/* Document Date edited on screen: recalculate that PO's Due Date, unless it was typed in by hand. */
+function bcDocDateChanged(el){
+  const box = el.closest('.bc-draft'), due = box && box.querySelector('[data-k="dueDate"]');
+  const record = modalContext && modalContext.record;
+  if (!due || !record || due.dataset.manual) return;
+  const calc = bcDueDateFor(record, box.dataset.terms, el.value);
+  if (calc) due.value = calc;
 }
 async function bcHandleCheck(silent){
   const record = modalContext && modalContext.record;
