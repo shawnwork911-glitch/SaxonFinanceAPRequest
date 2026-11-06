@@ -3225,14 +3225,13 @@ function renderAnalyticsStats(){
     { key: 'moreInfo', label: 'More info needed', value: counts[STATUS.PENDING_INFO] || 0 },
     { key: 'processed', label: 'Processed', value: counts[STATUS.PROCESSED] || 0 },
     { key: 'rejected', label: 'Rejected', value: rejectedTotal },
-    { key: 'urgent', label: 'Urgent — awaiting Finance', value: urgentAwaitingFinance, urgent: true }
+    { key: 'urgent', label: 'Urgent', value: urgentAwaitingFinance, urgent: true }
   ];
   document.getElementById('analytics-stats').innerHTML = tiles.map(t =>
     '<div class="stat-tile clickable' + (analyticsListFilter === t.key ? ' selected' : '') + (t.urgent ? ' stat-tile-urgent' + (t.value > 0 ? ' has-urgent' : '') : '') + '"' +
       ' tabindex="0" role="button" title="Show these requests" onclick="toggleAnalyticsListFilter(\'' + t.key + '\')"' +
       ' onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();toggleAnalyticsListFilter(\'' + t.key + '\');}">' +
       '<div class="stat-label">' + escapeHtml(t.label) + '</div><div class="stat-value">' + t.value + '</div>' +
-      (t.urgent && t.value > 0 ? '<div class="field-hint" style="color:var(--warn); margin-top:4px;">Finance should action these first.</div>' : '') +
     '</div>'
   ).join('');
 }
