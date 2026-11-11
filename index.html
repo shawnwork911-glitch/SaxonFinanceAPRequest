@@ -323,6 +323,12 @@
   .comment-meta strong { color: var(--ink); font-weight: 600; font-size: 12.5px; }
   .comment-role { font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--sub); }
   .comment-text { white-space: pre-wrap; word-break: break-word; color: var(--ink); line-height: 1.45; }
+  .comment-edited { font-style: italic; }
+  .comment-actions { margin-left: auto; display: inline-flex; gap: 2px; }
+  .comment-action { background: none; border: none; padding: 2px 6px; border-radius: 4px; font: inherit; font-size: 12px; color: var(--accent); cursor: pointer; }
+  .comment-action:hover { background: var(--line); }
+  .comment-action.danger { color: var(--bad); }
+  .comment-edit-box textarea { min-height: 56px; margin-top: 4px; }
   .comment-empty { font-size: 12.5px; color: var(--sub); margin-bottom: 10px; }
   .comment-compose textarea { min-height: 64px; }
   .comment-compose .btn-row { margin-top: 8px; align-items: center; }
@@ -3890,10 +3896,19 @@ function commentsInnerHtml(record){
     ? '<div class="comment-list" id="comment-list">' + comments.map(c => {
         const role = commentRoleLabel(record, c.by);
         const own = (c.by || '').toLowerCase() === me;
+        const atArg = escapeHtml(JSON.stringify(String(c.at || '')));
+        const actions = own
+          ? '<span class="comment-actions">' +
+              '<button type="button" class="comment-action" onclick="startEditComment(\'' + record.id + '\', ' + atArg + ', this)">Edit</button>' +
+              '<button type="button" class="comment-action danger" onclick="handleDeleteComment(\'' + record.id + '\', ' + atArg + ', this)">Delete</button>' +
+            '</span>'
+          : '';
         return '<div class="comment-item' + (own ? ' own' : '') + '">' +
           '<div class="comment-meta"><strong>' + escapeHtml(c.name || c.by || 'Unknown') + '</strong>' +
           (role ? '<span class="comment-role">' + role + '</span>' : '') +
-          '<span>' + fmtDateTime(c.at) + '</span></div>' +
+          '<span>' + fmtDateTime(c.at) + '</span>' +
+          (c.editedAt ? '<span class="comment-edited" title="Edited ' + escapeHtml(fmtDateTime(c.editedAt)) + '">(edited)</span>' : '') +
+          actions + '</div>' +
           '<div class="comment-text">' + escapeHtml(c.text) + '</div></div>';
       }).join('') + '</div>'
     : '<div class="comment-empty">No comments yet. Use the box below to ask a question or leave feedback on this request.</div>';
@@ -3951,6 +3966,96 @@ async function handlePostComment(itemId){
   }
   if (btn.isConnected) { setBusy(btn, false); if (input) input.value = ''; }
   else busyCount = Math.max(0, busyCount - 1); // button was replaced by the re-render
+}
+/* Edit / delete — only the comment's author sees the buttons, and the save re-checks
+   authorship against the live item. A comment is identified by its author + timestamp. */
+function findOwnCommentIndex(comments, at){
+  const me = myEmail();
+  return comments.findIndex(c => String(c.at || '') === at && (c.by || '').toLowerCase() === me);
+}
+function rerenderComments(itemId, live, commentsJson){
+  const cached = findRecord(itemId);
+  if (cached) cached.comments = commentsJson;
+  live.comments = commentsJson;
+  if (modalContext && modalContext.record && modalContext.record.id === itemId) {
+    modalContext.record.comments = commentsJson;
+    const section = document.getElementById('comments-section');
+    if (section) section.innerHTML = commentsInnerHtml(live);
+  }
+}
+function startEditComment(itemId, at, btn){
+  const item = btn.closest('.comment-item');
+  if (!item || item.querySelector('.comment-edit-box')) return;
+  const rec = findRecord(itemId) || (modalContext && modalContext.record);
+  const comments = parseComments(rec && rec.comments);
+  const idx = findOwnCommentIndex(comments, at);
+  if (idx < 0) { showToast('This comment could not be found. Refresh and try again.', 'error'); return; }
+  const textEl = item.querySelector('.comment-text');
+  textEl.style.display = 'none';
+  item.querySelector('.comment-actions').style.display = 'none';
+  const box = document.createElement('div');
+  box.className = 'comment-edit-box';
+  box.innerHTML =
+    '<textarea class="text-field"></textarea>' +
+    '<div class="btn-row" style="margin-top:6px; justify-content:flex-end;">' +
+      '<button type="button" class="btn btn-ghost">Cancel</button>' +
+      '<button type="button" class="btn btn-primary">Save</button></div>';
+  const ta = box.querySelector('textarea');
+  ta.value = comments[idx].text || '';
+  const [cancelBtn, saveBtn] = box.querySelectorAll('button');
+  cancelBtn.onclick = () => { box.remove(); textEl.style.display = ''; item.querySelector('.comment-actions').style.display = ''; };
+  saveBtn.onclick = () => handleSaveCommentEdit(itemId, at, ta, saveBtn);
+  ta.onkeydown = (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); saveBtn.click(); }
+    else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); cancelBtn.click(); }
+  };
+  item.appendChild(box);
+  ta.focus();
+}
+async function handleSaveCommentEdit(itemId, at, ta, btn){
+  const text = (ta.value || '').trim();
+  if (!text) { showToast('A comment cannot be empty. Use Delete to remove it.', 'error'); ta.focus(); return; }
+  setBusy(btn, true, 'Saving…');
+  try {
+    const live = await fetchCurrentRecord(itemId);
+    const comments = parseComments(live.comments);
+    const idx = findOwnCommentIndex(comments, at);
+    if (idx < 0) throw new Error('the comment no longer exists or is not yours.');
+    if (comments[idx].text === text) { setBusy(btn, false); ta.closest('.comment-edit-box').querySelector('.btn-ghost').click(); return; }
+    comments[idx].text = text;
+    comments[idx].editedAt = nowIso();
+    const commentsJson = JSON.stringify(comments);
+    await updateRequestItem(itemId, { comments: commentsJson });
+    rerenderComments(itemId, live, commentsJson);
+    showToast('Comment updated.', 'success');
+  } catch (e) {
+    showToast('Could not update comment: ' + e.message, 'error');
+    if (btn.isConnected) setBusy(btn, false);
+    return;
+  }
+  if (btn.isConnected) setBusy(btn, false);
+  else busyCount = Math.max(0, busyCount - 1); // button was replaced by the re-render
+}
+async function handleDeleteComment(itemId, at, btn){
+  if (!confirm('Delete this comment? This cannot be undone.')) return;
+  setBusy(btn, true, 'Deleting…');
+  try {
+    const live = await fetchCurrentRecord(itemId);
+    const comments = parseComments(live.comments);
+    const idx = findOwnCommentIndex(comments, at);
+    if (idx < 0) throw new Error('the comment no longer exists or is not yours.');
+    comments.splice(idx, 1);
+    const commentsJson = JSON.stringify(comments);
+    await updateRequestItem(itemId, { comments: commentsJson });
+    rerenderComments(itemId, live, commentsJson);
+    showToast('Comment deleted.', 'success');
+  } catch (e) {
+    showToast('Could not delete comment: ' + e.message, 'error');
+    if (btn.isConnected) setBusy(btn, false);
+    return;
+  }
+  if (btn.isConnected) setBusy(btn, false);
+  else busyCount = Math.max(0, busyCount - 1);
 }
 // Emails the other people on the request (requester, current approver, and Finance once
 // it's in their queue) so a comment doesn't sit unseen. Non-fatal if it fails.
