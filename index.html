@@ -657,6 +657,31 @@ html.desk-nav-hidden #tabs{transform:translateX(-100%);visibility:hidden;}
   .bc-confirm-table .num { text-align: right; white-space: nowrap; }
   .bc-confirm-tick { display: flex; gap: 8px; align-items: flex-start; margin-top: 14px; font-size: 13px; font-weight: 600; cursor: pointer; }
   .bc-confirm-tick input { margin-top: 2px; width: 16px; height: 16px; flex: none; }
+
+  /* ---- phone: tables become stacked cards, pop-up panels fit the screen ---- */
+  @media (max-width: 640px) {
+    table.data-table, table.data-table tbody { display: block; width: 100%; }
+    table.data-table thead { display: none; }
+    table.data-table tbody tr {
+      display: block; border: 1px solid var(--line); border-radius: 10px; margin-bottom: 10px; padding: 6px 0; background: var(--panel);
+    }
+    table.data-table tbody tr.row-urgent { background: var(--bad-bg); box-shadow: inset 3px 0 0 var(--bad); }
+    table.data-table tbody td {
+      display: block; overflow: hidden; border-bottom: none; padding: 6px 14px; text-align: right; word-break: break-word; min-height: 0;
+    }
+    table.data-table tbody td::before {
+      content: attr(data-label); float: left; max-width: 45%; margin-right: 12px; text-align: left;
+      font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--sub); line-height: 1.9;
+    }
+    table.data-table tbody td:not([data-label])::before, table.data-table tbody td[data-label=""]::before { content: none; }
+    table.data-table tbody td:empty { display: none; }
+    table.data-table tbody tr.empty-row td, table.data-table tbody td[colspan] { text-align: center; }
+    .pop-panel {
+      position: fixed; top: calc(var(--topbar-h, 60px) + 6px); left: 10px; right: 10px;
+      width: auto !important; max-width: none !important;
+    }
+    #notif-list { max-height: calc(100vh - var(--topbar-h, 60px) - 90px); }
+  }
 </style>
 </head>
 <body>
@@ -5753,6 +5778,31 @@ function markAllNotificationsRead(){
     var h=!root.classList.contains('desk-nav-hidden'); apply(h);
     try{ localStorage.setItem(KEY, h?'1':'0'); }catch(e){}
   });
+})();
+</script>
+<script>
+/* Phone layout: copy each table's column headings onto its cells (data-label) so the
+   stacked-card view can show "Vendor", "Amount", etc. next to each value. */
+(function(){
+  function labelTables(){
+    document.querySelectorAll('table.data-table').forEach(function(t){
+      var heads = Array.prototype.map.call(t.querySelectorAll('thead th'), function(th){ return th.textContent.trim(); });
+      if (!heads.length) return;
+      t.querySelectorAll('tbody tr').forEach(function(tr){
+        var col = 0;
+        Array.prototype.forEach.call(tr.children, function(td){
+          var span = parseInt(td.getAttribute('colspan') || '1', 10) || 1;
+          var label = span === 1 ? (heads[col] || '') : '';
+          if (td.getAttribute('data-label') !== label) td.setAttribute('data-label', label);
+          col += span;
+        });
+      });
+    });
+  }
+  var queued = false;
+  function queue(){ if (queued) return; queued = true; requestAnimationFrame(function(){ queued = false; labelTables(); }); }
+  function start(){ labelTables(); new MutationObserver(queue).observe(document.body, { childList: true, subtree: true }); }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
 })();
 </script>
 </body>
