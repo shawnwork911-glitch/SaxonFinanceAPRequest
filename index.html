@@ -1097,7 +1097,7 @@ html.desk-nav-hidden #tabs{transform:translateX(-100%);visibility:hidden;}
   <div class="view" id="view-admin">
     <div class="card" id="admin-list-warning" style="display:none; border-left: 3px solid var(--warn); background: var(--warn-bg);">
       <strong>The "AP System Roles" list wasn't found on this site.</strong>
-      <div class="field-hint" style="margin-top:6px;">Create a SharePoint list named exactly <code>AP System Roles</code> on the same site as your requests list, with columns: <code>RoleType</code> (Choice: "Department Approver", "Finance Team", "Requester Department"), <code>Department</code> (Choice: Digital Growth &amp; Branding/Strategic Partnerships &amp; Events/Operations/HR Admin/Carbon Credit — leave blank for Finance Team rows), <code>Email</code> (Single line of text). Then click Recheck below.</div>
+      <div class="field-hint" style="margin-top:6px;">Create a SharePoint list named exactly <code>AP System Roles</code> on the same site as your requests list, with columns: <code>RoleType</code> (Choice: "Department Approver", "Senior Approver", "Finance Team", "Requester Department"), <code>Department</code> (Choice: Digital Growth &amp; Branding/Strategic Partnerships &amp; Events/Operations/HR Admin/Carbon Credit — leave blank for Finance Team and Senior Approver rows), <code>Email</code> (Single line of text). Then click Recheck below.</div>
       <div class="btn-row" style="justify-content:flex-start; margin-top:10px;">
         <button type="button" class="btn btn-ghost" onclick="recheckRolesList()">Recheck</button>
       </div>
@@ -1110,6 +1110,15 @@ html.desk-nav-hidden #tabs{transform:translateX(-100%);visibility:hidden;}
         </div>
       </div>
       <div id="admin-dept-body"></div>
+    </div>
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <h2>Higher-level Approver</h2>
+          <div class="muted small">Company-wide. When a request is raised by a department approver, it goes to this person instead of the department approver. Skipped when the requester's email is the same as the department approver's.</div>
+        </div>
+      </div>
+      <div id="admin-senior-body"></div>
     </div>
     <div class="card">
       <div class="card-head">
@@ -1456,6 +1465,10 @@ const DEPARTMENTS = {
   "HR Admin":   { approverEmail: "hr.approver@saxonrenewables.com" },
   "Carbon Credit": { approverEmail: "" } // set the real approver in the User Management tab
 };
+/* Company-wide higher-level approver. When the requester is themselves a department approver, the request is
+   routed here instead of the department approver (see resolveApproverEmail()). Fallback only - the "Senior
+   Approver" row in the AP System Roles list (User Management tab) overrides it. Blank = no escalation. */
+const SENIOR_APPROVER_EMAIL = "";
 const FINANCE_TEAM = [
   "finance1@saxonrenewables.com",
   "finance2@saxonrenewables.com"
@@ -1547,6 +1560,7 @@ let rolesListId = null;
 let rolesColumnMapCache = null;
 let deptApproverMap = {};  // { "Digital Growth & Branding": { itemId, email }, ... }
 let financeMembers = [];   // [{ itemId, email }, ...]
+let seniorApprover = { itemId: null, email: '' }; // company-wide higher-level approver, for requests raised by department approvers
 let rolesLoadError = ''; // why the roles list couldn't be read for this user, if it couldn't
 let requesterDeptMap = []; // [{ itemId, email, department }, ...] — defaults a requester's New Request department, doesn't lock it
 const APP_URL = window.location.origin + window.location.pathname; // linked from notification emails so recipients can click straight into the app
@@ -1568,6 +1582,35 @@ function myEmail(){ return currentAccount ? currentAccount.username.toLowerCase(
 function approverDepartments(){
   const email = myEmail();
   return Object.keys(deptApproverMap).filter(d => (deptApproverMap[d].email || '').toLowerCase() === email);
+}
+function isSeniorApprover(){
+  return !!seniorApprover.email && seniorApprover.email.toLowerCase() === myEmail();
+}
+/* Who a new request goes to. Normally the department approver. If the requester is themselves a department
+   approver, it goes to the company-wide higher-level approver instead. Exceptions (rule skipped, request goes
+   to the department approver as normal): the requester's email IS the department approver's email, no higher
+   approver is configured, or the requester is the higher approver (nobody above them). */
+function resolveApproverEmail(department, requesterEmail){
+  const deptApprover = ((deptApproverMap[department] || {}).email || '');
+  const req = (requesterEmail || '').toLowerCase();
+  const senior = (seniorApprover.email || '').toLowerCase();
+  if (!req || !senior) return deptApprover;
+  const requesterIsApprover = Object.keys(deptApproverMap).some(d => (deptApproverMap[d].email || '').toLowerCase() === req);
+  if (!requesterIsApprover) return deptApprover;
+  if (req === deptApprover.toLowerCase()) return deptApprover;
+  if (req === senior) return deptApprover;
+  return seniorApprover.email;
+}
+/* True when the request was escalated to the higher-level approver rather than its department approver. */
+function isEscalatedToSenior(r){
+  const senior = (seniorApprover.email || '').toLowerCase();
+  if (!senior || (r.approverEmail || '').toLowerCase() !== senior) return false;
+  return ((deptApproverMap[r.department] || {}).email || '').toLowerCase() !== senior;
+}
+function escalationNote(department, requesterEmail, approverEmail){
+  const dept = ((deptApproverMap[department] || {}).email || '').toLowerCase();
+  return (approverEmail && approverEmail.toLowerCase() !== dept)
+    ? ' Requester is a department approver, so it was routed to the higher-level approver (' + approverEmail + ').' : '';
 }
 function isFinanceUser(){
   const email = myEmail();
@@ -1707,6 +1750,7 @@ async function loadRolesConfig(){
   deptApproverMap = {};
   financeMembers = [];
   requesterDeptMap = [];
+  seniorApprover = { itemId: null, email: SENIOR_APPROVER_EMAIL || '' };
   if (!rolesListId) {
     Object.keys(DEPARTMENTS).forEach(d => { deptApproverMap[d] = { itemId: null, email: DEPARTMENTS[d].approverEmail || '' }; });
     financeMembers = FINANCE_TEAM.map(e => ({ itemId: null, email: e }));
@@ -1724,6 +1768,8 @@ async function loadRolesConfig(){
     const department = normalizeDept(colMap.Department ? f[colMap.Department] : '');
     if (roleType === 'Department Approver' && department) {
       deptApproverMap[department] = { itemId: item.id, email };
+    } else if (roleType === 'Senior Approver' && email) {
+      seniorApprover = { itemId: item.id, email };
     } else if (roleType === 'Finance Team' && email) {
       financeMembers.push({ itemId: item.id, email });
     } else if (roleType === 'Requester Department' && email && department) {
@@ -1756,6 +1802,31 @@ async function saveDeptApprover(department){
       await graphFetch("/sites/" + siteId + "/lists/" + rolesListId + "/items", { method: 'POST', body: JSON.stringify({ fields: fieldsBody }) });
     }
     showToast(department + ' approver updated.', 'success');
+    await loadRolesConfig();
+    renderAdminTab();
+    setupRoleUI();
+  } catch (e) { showToast('Could not save: ' + e.message, 'error'); }
+  setBusy(btn, false);
+}
+async function saveSeniorApprover(){
+  const btn = document.getElementById('admin-senior-btn');
+  const input = document.getElementById('admin-senior-approver');
+  const email = input.value.trim();
+  if (!email) { showToast('Enter an email address for the higher-level approver.', 'error'); return; }
+  if (!rolesListId) { showToast('The "' + SP_ROLES_LIST_NAME + '" list was not found on this site \u2014 create it first, then click Recheck.', 'error'); return; }
+  setBusy(btn, true, 'Saving\u2026');
+  try {
+    const colMap = await getRolesColumnMap();
+    const fieldsBody = {};
+    if (colMap.RoleType) fieldsBody[colMap.RoleType] = 'Senior Approver';
+    if (colMap.Email) fieldsBody[colMap.Email] = email;
+    fieldsBody['Title'] = 'Senior Approver';
+    if (seniorApprover.itemId) {
+      await graphFetch("/sites/" + siteId + "/lists/" + rolesListId + "/items/" + seniorApprover.itemId + "/fields", { method: 'PATCH', body: JSON.stringify(fieldsBody) });
+    } else {
+      await graphFetch("/sites/" + siteId + "/lists/" + rolesListId + "/items", { method: 'POST', body: JSON.stringify({ fields: fieldsBody }) });
+    }
+    showToast('Higher-level approver updated.', 'success');
     await loadRolesConfig();
     renderAdminTab();
     setupRoleUI();
@@ -1846,6 +1917,14 @@ function renderAdminTab(){
         '<button type="button" class="btn btn-primary" id="admin-approver-btn-' + d + '" onclick="saveDeptApprover(\'' + d + '\')">Save</button>' +
       '</div>';
     }).join('');
+  }
+  const seniorEl = document.getElementById('admin-senior-body');
+  if (seniorEl) {
+    seniorEl.innerHTML = '<div class="field-row" style="display:flex; gap:8px; align-items:flex-end; margin-bottom:12px;">' +
+      '<div style="flex:1;"><label class="field-label">Higher-level approver</label>' +
+      '<input class="text-field" id="admin-senior-approver" value="' + escapeHtml(seniorApprover.email || '') + '" placeholder="name@saxonrenewables.com"></div>' +
+      '<button type="button" class="btn btn-primary" id="admin-senior-btn" onclick="saveSeniorApprover()">Save</button></div>' +
+      (seniorApprover.email ? '' : '<div class="field-hint">Not set \u2014 requests from department approvers currently go to their own department approver.</div>');
   }
   const financeEl = document.getElementById('admin-finance-body');
   if (financeEl) {
@@ -2826,7 +2905,7 @@ async function handleSaveDraft(){
     const requestId = pendingNewRequestId || (pendingNewRequestId = genRequestId());
     const docs = await uploadFilesForRequest(form.department, form.vendorName, form.currency, requestId, newRequestFiles, uploadProgressLabel(btn, 'Uploading'));
     btn.textContent = 'Saving…';
-    const approverEmail = ((deptApproverMap[form.department] || {}).email || '');
+    const approverEmail = resolveApproverEmail(form.department, currentAccount.username);
     const record = Object.assign({}, form, {
       title: form.vendorName, requestId,
       requestorName: currentAccount.name || currentAccount.username,
@@ -2854,10 +2933,11 @@ async function handleSubmitRequest(){
     const requestId = pendingNewRequestId || (pendingNewRequestId = genRequestId());
     const docs = await uploadFilesForRequest(form.department, form.vendorName, form.currency, requestId, newRequestFiles, uploadProgressLabel(btn, 'Uploading'));
     btn.textContent = 'Submitting…';
-    const approverEmail = ((deptApproverMap[form.department] || {}).email || '');
+    const approverEmail = resolveApproverEmail(form.department, currentAccount.username);
     const historyMsg = form.isUrgent
       ? currentAccount.username + ' submitted an URGENT PAYMENT request for approval (' + form.department + ').'
       : currentAccount.username + ' submitted for approval (' + form.department + ').';
+    const escNote = escalationNote(form.department, currentAccount.username, approverEmail);
     const record = Object.assign({}, form, {
       title: form.vendorName, requestId,
       requestorName: currentAccount.name || currentAccount.username,
@@ -2866,7 +2946,7 @@ async function handleSubmitRequest(){
       status: STATUS.PENDING_APPROVAL,
       approverEmail,
       submittedDate: nowIso(),
-      historyLog: appendHistory('', historyMsg)
+      historyLog: appendHistory('', historyMsg + escNote)
     });
     await createRequestItem(record);
     await notifyApproverOfNewRequest(record);
@@ -2891,11 +2971,12 @@ function setupRoleUI(){
   const badges = ['Requester'];
   const depts = approverDepartments();
   depts.forEach(d => badges.push('Approver · ' + d));
+  if (isSeniorApprover()) badges.push('Higher-level Approver');
   if (isFinanceUser()) badges.push('Finance');
   if (isAdminUser()) badges.push('Super Admin');
   // Shown in the account menu as "· Super Admin", most senior role first (like the other Saxon apps).
   badgesEl.textContent = '\u00B7 ' + badges.slice().reverse().join(' \u00B7 ');
-  document.getElementById('tab-approvals').style.display = depts.length ? '' : 'none';
+  document.getElementById('tab-approvals').style.display = (depts.length || isSeniorApprover()) ? '' : 'none';
   document.getElementById('tab-finance').style.display = isFinanceUser() ? '' : 'none';
   document.getElementById('tab-admin').style.display = isAdminUser() ? '' : 'none';
 }
@@ -3141,8 +3222,10 @@ function renderApprovalsTable(){
   const email = myEmail();
   const deptFilter = document.getElementById('approvals-dept-filter').value;
   // The tab badge always reflects everything waiting on you, regardless of the department filter.
+  // Assigned to me, or in one of my departments (unless it was escalated to the higher-level approver).
   const pendingAll = allItemsCache.filter(r => r.status === STATUS.PENDING_APPROVAL &&
-      depts.includes(r.department));
+      (((r.approverEmail || '').toLowerCase() === email && (depts.includes(r.department) || isSeniorApprover())) ||
+       (depts.includes(r.department) && !isEscalatedToSenior(r))));
   const apprKw = kwValue('approvals-search');
   syncVerifyFilter('approvals-verify-filter');
   const verFilter = document.getElementById('approvals-verify-filter').value;
@@ -3210,7 +3293,7 @@ function renderFinanceTable(){
 
 /* ---- Analytics ---- */
 function isPrivilegedViewer(){
-  return isFinanceUser() || approverDepartments().length > 0 || isAdminUser();
+  return isFinanceUser() || approverDepartments().length > 0 || isSeniorApprover() || isAdminUser();
 }
 function analyticsScope(){
   let scope = isPrivilegedViewer()
@@ -4253,7 +4336,7 @@ async function handleSaveDraftEdits(itemId){
   try {
     const newDocs = modalContext.editFiles.length ? await uploadFilesForRequest(form.department, form.vendorName, form.currency, record.requestId, modalContext.editFiles, uploadProgressLabel(btn, 'Uploading')) : [];
     const combinedDocs = (modalContext.editDocs || []).concat(newDocs);
-    const approverEmail = ((deptApproverMap[form.department] || {}).email || '');
+    const approverEmail = resolveApproverEmail(form.department, record.requestorEmail);
     const patch = Object.assign({}, form, {
       title: form.vendorName,
       documentLinks: JSON.stringify(combinedDocs),
@@ -4380,7 +4463,7 @@ async function handleSubmitDraft(itemId){
   try {
     const newDocs = modalContext.editFiles.length ? await uploadFilesForRequest(form.department, form.vendorName, form.currency, record.requestId, modalContext.editFiles, uploadProgressLabel(btn, 'Uploading')) : [];
     const combinedDocs = (modalContext.editDocs || []).concat(newDocs);
-    const approverEmail = ((deptApproverMap[form.department] || {}).email || '');
+    const approverEmail = resolveApproverEmail(form.department, record.requestorEmail);
     const historyMsg = form.isUrgent
       ? currentAccount.username + ' submitted this URGENT PAYMENT draft for approval (' + form.department + ').'
       : currentAccount.username + ' submitted this draft for approval (' + form.department + ').';
@@ -4390,7 +4473,7 @@ async function handleSubmitDraft(itemId){
       status: STATUS.PENDING_APPROVAL,
       approverEmail,
       submittedDate: nowIso(),
-      historyLog: appendHistory(record.historyLog, historyMsg)
+      historyLog: appendHistory(record.historyLog, historyMsg + escalationNote(form.department, record.requestorEmail, approverEmail))
     });
     await updateRequestItem(itemId, patch);
     await notifyApproverOfNewRequest(Object.assign({}, record, patch));
@@ -4492,7 +4575,7 @@ async function handleWithdrawToDraft(itemId){
     const docsBefore = parseDocLinks(live.documentLinks);
     const newDocs = modalContext.editFiles.length ? await uploadFilesForRequest(form.department, form.vendorName, form.currency, live.requestId, modalContext.editFiles, uploadProgressLabel(btn, 'Uploading')) : [];
     const combinedDocs = (modalContext.editDocs || []).concat(newDocs);
-    const approverEmail = ((deptApproverMap[form.department] || {}).email || '');
+    const approverEmail = resolveApproverEmail(form.department, live.requestorEmail);
     const changeSummary = describeEdits(live, form, docsBefore, combinedDocs);
     const previousStage = live.status === STATUS.PENDING_FINANCE ? 'Finance review (already approved by ' + (live.approverEmail || 'approver') + ')' : 'department approval';
     const historyMsg = currentAccount.username + ' withdrew the request from ' + previousStage + ' and saved it back as a draft. Changes: ' + changeSummary + '.';
@@ -4546,11 +4629,11 @@ async function handleResubmitEdits(itemId){
     const docsBefore = parseDocLinks(live.documentLinks);
     const newDocs = modalContext.editFiles.length ? await uploadFilesForRequest(form.department, form.vendorName, form.currency, live.requestId, modalContext.editFiles, uploadProgressLabel(btn, 'Uploading')) : [];
     const combinedDocs = (modalContext.editDocs || []).concat(newDocs);
-    const approverEmail = ((deptApproverMap[form.department] || {}).email || '');
+    const approverEmail = resolveApproverEmail(form.department, live.requestorEmail);
     const changeSummary = describeEdits(live, form, docsBefore, combinedDocs);
     const previousStage = live.status === STATUS.PENDING_FINANCE ? 'Finance review (already approved by ' + (live.approverEmail || 'approver') + ')' : 'department approval';
     const historyMsg = currentAccount.username + ' edited the request while it was awaiting ' + previousStage + '. Changes: ' + changeSummary +
-      '. Approval process restarted — routed to the ' + form.department + ' department approver (' + (approverEmail || 'none configured') + ')' + (form.isUrgent ? ' as URGENT PAYMENT.' : '.');
+      '. Approval process restarted — routed to ' + (escalationNote(form.department, live.requestorEmail, approverEmail) ? 'the higher-level approver' : 'the ' + form.department + ' department approver') + ' (' + (approverEmail || 'none configured') + ')' + (form.isUrgent ? ' as URGENT PAYMENT.' : '.');
     const patch = Object.assign({}, form, {
       title: form.vendorName,
       documentLinks: JSON.stringify(combinedDocs),
