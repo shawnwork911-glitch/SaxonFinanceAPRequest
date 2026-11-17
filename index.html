@@ -836,7 +836,7 @@ html.desk-nav-hidden #tabs{transform:translateX(-100%);visibility:hidden;}
       <div class="field-row" style="margin-top:10px;">
         <label class="field-label">Supporting Documents <span class="req">*</span></label>
         <div class="doc-groups" id="new-doc-groups"></div>
-        <div class="field-hint">Upload each file under its group; you only need the groups that apply. PO, POD and Invoice files are saved as <code>PO_&hellip;</code>, <code>POD_&hellip;</code> or <code>Invoice_&hellip;</code> unless the file name already says so; Others keep their file name. Files upload to the department's SharePoint folder when you save or submit.</div>
+        <div class="field-hint">Upload each file under its group; you only need the groups that apply. PO, POD and Invoice files are saved as <code>PO_&hellip;</code>, <code>POD_&hellip;</code> or <code>Invoice_&hellip;</code> unless the file name already says so; Others keep their file name. Files stay in this browser while the request is a draft and are uploaded to the department's SharePoint folder only when you submit.</div>
       </div>
 
       <div class="btn-row">
@@ -869,7 +869,7 @@ html.desk-nav-hidden #tabs{transform:translateX(-100%);visibility:hidden;}
         </div>
       </div>
       <table class="data-table">
-        <thead><tr><th>Document Number</th><th>Department</th><th>Vendor</th><th>Amount</th><th>Outcome</th><th>Decided</th><th>Payment ref.</th></tr></thead>
+        <thead><tr><th>Document Number</th><th>Department</th><th>Vendor</th><th>Amount</th><th>Outcome</th><th>Due Date</th><th>Payment ref.</th></tr></thead>
         <tbody id="mine-table-body"></tbody>
       </table>
     </div>
@@ -2106,19 +2106,63 @@ function vendorFolderName(vendorName){
     .replace(/[.\s]+$/, '')
     .slice(0, 200);
 }
-async function uploadFilesForRequest(department, vendorName, currency, requestId, files, onProgress){
+/* ---- One folder PER REQUEST ----
+   Every request gets its own folder, even when the company name is the same:
+   "Company A_1", "Company A_2", ... The number is the next free one in the parent folder (and in the
+   department's extra-copy folder too, so both copies carry the same name). */
+function stripFolderSuffix(name){ return String(name || '').replace(/_\d+$/, ''); }
+/* Highest N among sibling folders named "<base>_N" under parentPath (0 when none / parent not created yet). */
+async function maxFolderSuffix(driveId, parentPath, base){
+  const esc = base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp('^' + esc + '_(\\d+)$', 'i');
+  let max = 0;
+  let url = "/drives/" + driveId + "/root:/" + encodeURIComponent(parentPath).replace(/%2F/g, '/') + ":/children?$select=name,folder&$top=999";
+  try {
+    while (url) {
+      const res = await graphFetch(url);
+      (res.value || []).forEach(it => { const m = re.exec(it.name || ''); if (m) max = Math.max(max, parseInt(m[1], 10)); });
+      url = res['@odata.nextLink'] || '';
+    }
+  } catch (e) { /* parent folder doesn't exist yet - nothing numbered */ }
+  return max;
+}
+const requestFolderCache = new Map();   // requestId|dept|base -> folder name chosen, so retries and later saves reuse it
+async function folderNameForRequest(parents, department, vendorName, requestId, existingDocs){
+  const base = vendorFolderName(vendorName);
+  if (!base) return requestId;                                           // no vendor yet: the request ID is already unique
+  const cacheKey = requestId + '|' + department + '|' + base.toLowerCase();
+  if (requestFolderCache.has(cacheKey)) return requestFolderCache.get(cacheKey);
+  // Already uploaded files for this request in the holding folder? Keep using that folder.
+  for (const d of (existingDocs || [])) {
+    if (!d || !d.url || !isFinanceDocUrl(d.url)) continue;
+    const pr = financeRelParts(d.url);
+    if (!pr) continue;
+    const parts = pr.slice();
+    if (parts.length >= 5 && Object.values(ENTITY_FOLDERS).indexOf(parts[0]) !== -1) parts.shift();
+    if (parts.length >= 4 && parts[0] === PENDING_FOLDER && parts[1] === department && stripFolderSuffix(parts[2]).toLowerCase() === base.toLowerCase()) {
+      requestFolderCache.set(cacheKey, parts[2]);
+      return parts[2];
+    }
+  }
+  let max = 0;
+  for (const par of parents) max = Math.max(max, await maxFolderSuffix(par.driveId, par.path, base));
+  const name = base + '_' + (max + 1);
+  requestFolderCache.set(cacheKey, name);
+  return name;
+}
+async function uploadFilesForRequest(department, vendorName, currency, requestId, files, onProgress, existingDocs){
   if (!files.length) return [];
   const periodFolder = PENDING_FOLDER;   // moved to the approval-date period folder on approval
   const entityFolder = entityFolderFor(currency);
-  // Files are grouped by vendor; fall back to the request ID if no vendor name was entered yet (e.g. an early draft).
-  const subFolder = vendorFolderName(vendorName) || requestId;
+  const baseDests = uploadDestinationsFor(department);
+  const parentOf = d => d.vendorOnly ? d.root : d.root + '/' + entityFolder + '/' + periodFolder + '/' + department;
+  // One folder per request: "<Company>_<n>" (or the request ID when no vendor name was entered yet).
+  const subFolder = await folderNameForRequest(baseDests.map(d => ({ driveId: d.driveId, path: parentOf(d) })), department, vendorName, requestId, existingDocs);
   const namePrefix = RENAME_FILES_ON_UPLOAD ? fileNamePrefix(entityFolder, periodFolder, department, subFolder) : '';
   // dests[0] is the main Finance Documents copy (its links are what the request stores);
   // any further entries are extra copies — see DEPT_UPLOAD_DESTINATIONS.
-  const dests = uploadDestinationsFor(department).map(d => {
-    const folderPath = d.vendorOnly
-      ? d.root + '/' + subFolder                                        // extra copy: <root>/VendorName
-      : d.root + '/' + entityFolder + '/' + periodFolder + '/' + department + '/' + subFolder; // main copy: <root>/Entity/Period/Department/VendorName
+  const dests = baseDests.map(d => {
+    const folderPath = parentOf(d) + '/' + subFolder;   // main: <root>/Entity/Period/Department/Company_n   extra copy: <root>/Company_n
     return Object.assign({}, d, { folderPath, cacheKey: d.driveId + '|' + folderPath });
   });
   const results = new Array(files.length);
@@ -2167,6 +2211,116 @@ async function uploadFilesForRequest(department, vendorName, currency, requestId
     }
   }
   return results;
+}
+/* ---- Draft attachments live in THIS browser (IndexedDB) until the request is submitted ----
+   Save draft no longer touches SharePoint. The draft's documentLinks holds placeholder entries
+   { name, local:true, key } and the file bytes sit in IndexedDB. Submit uploads them to the
+   department folder and swaps the placeholders for real SharePoint links. Drafts are therefore tied to
+   the browser/device that saved the files. If IndexedDB is unavailable (e.g. some private windows),
+   saving a draft falls back to the old behaviour of uploading straight away. */
+const DRAFT_DB_NAME = 'saxon-ap-draft-files', DRAFT_STORE = 'files';
+let draftDbPromise = null;
+const localFileCache = new Map();          // key -> File, so a retry after a failed upload doesn't re-upload files that already made it
+const localMissingKeys = new Set();        // placeholder keys whose bytes are not in this browser
+function draftDb(){
+  if (!draftDbPromise) draftDbPromise = new Promise((resolve, reject) => {
+    try {
+      const req = indexedDB.open(DRAFT_DB_NAME, 1);
+      req.onupgradeneeded = () => req.result.createObjectStore(DRAFT_STORE, { keyPath: 'key' });
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error || new Error('IndexedDB error'));
+      req.onblocked = () => reject(new Error('IndexedDB blocked'));
+    } catch (e) { reject(e); }
+  });
+  draftDbPromise.catch(() => { draftDbPromise = null; });
+  return draftDbPromise;
+}
+function idbDone(tx){ return new Promise((res, rej) => { tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); tx.onabort = () => rej(tx.error); }); }
+function idbReq(r){ return new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); }
+function draftKeyPrefix(requestId){ return myEmail() + '|' + requestId + '|'; }
+async function draftStorageAvailable(){ try { await draftDb(); return true; } catch (e) { return false; } }
+/* Stores the picked files in the browser and returns placeholder entries for documentLinks. */
+async function saveLocalDraftFiles(requestId, files){
+  if (!files.length) return [];
+  const db = await draftDb();
+  const entries = [], records = [];
+  for (const f of files) {
+    const key = draftKeyPrefix(requestId) + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    records.push({ key, name: f.name, type: f.type, lastModified: f.lastModified, docGroup: docGroupFor(f).key, buf: await f.arrayBuffer() });
+    entries.push({ name: groupedFileName(f), local: true, key, group: docGroupFor(f).key });
+  }
+  const tx = db.transaction(DRAFT_STORE, 'readwrite');
+  records.forEach(r => tx.objectStore(DRAFT_STORE).put(r));
+  await idbDone(tx);
+  return entries;
+}
+/* Turns placeholder entries back into File objects. Returns { files, missing[] }. */
+async function loadLocalDraftFiles(entries){
+  const files = [], missing = [];
+  if (!entries.length) return { files, missing };
+  let db = null;
+  try { db = await draftDb(); } catch (e) { return { files, missing: entries.map(d => d.name) }; }
+  for (const d of entries) {
+    if (localFileCache.has(d.key)) { files.push(localFileCache.get(d.key)); continue; }
+    const rec = await idbReq(db.transaction(DRAFT_STORE).objectStore(DRAFT_STORE).get(d.key));
+    if (!rec) { missing.push(d.name); continue; }
+    const f = new File([rec.buf], rec.name, { type: rec.type, lastModified: rec.lastModified });
+    f.docGroup = rec.docGroup || 'Other';
+    localFileCache.set(d.key, f);
+    files.push(f);
+  }
+  return { files, missing };
+}
+async function deleteLocalDraftFiles(keys){
+  if (!keys || !keys.length) return;
+  try {
+    const db = await draftDb();
+    const tx = db.transaction(DRAFT_STORE, 'readwrite');
+    keys.forEach(k => { tx.objectStore(DRAFT_STORE).delete(k); localFileCache.delete(k); localMissingKeys.delete(k); });
+    await idbDone(tx);
+  } catch (e) { /* best effort */ }
+}
+async function deleteAllLocalDraftFiles(requestId){
+  try {
+    const db = await draftDb();
+    const pre = draftKeyPrefix(requestId);
+    const tx = db.transaction(DRAFT_STORE, 'readwrite');
+    tx.objectStore(DRAFT_STORE).delete(IDBKeyRange.bound(pre, pre + '￿'));
+    await idbDone(tx);
+    [...localFileCache.keys()].forEach(k => { if (k.indexOf(pre) === 0) localFileCache.delete(k); });
+  } catch (e) { /* best effort */ }
+}
+/* Draft save: keep files in the browser; fall back to a real upload if browser storage is unavailable. */
+async function stashDraftFiles(department, vendorName, currency, requestId, files, btn, existingDocs){
+  if (!files.length) return [];
+  if (await draftStorageAvailable()) {
+    try { return await saveLocalDraftFiles(requestId, files); }
+    catch (e) { showToast('Browser storage failed (' + e.message + ') — uploading the attachments to SharePoint instead.', 'error'); }
+  }
+  return uploadFilesForRequest(department, vendorName, currency, requestId, files, uploadProgressLabel(btn, 'Uploading'), existingDocs);
+}
+/* Submit: upload any browser-held draft attachments together with newly picked ones.
+   Returns { docs, localKeys } — docs = every SharePoint link for the request. Throws if a placeholder's file is not in this browser. */
+async function uploadDraftAttachments(form, requestId, editDocs, newFiles, btn){
+  const locals = (editDocs || []).filter(d => d.local);
+  const remote = (editDocs || []).filter(d => !d.local);
+  const loaded = await loadLocalDraftFiles(locals);
+  if (loaded.missing.length) {
+    throw new Error('These attachments were saved in a different browser or device and are not available here: ' + loaded.missing.join(', ') +
+      '. Remove them and attach the files again, or open this draft on the browser where you saved it.');
+  }
+  const all = loaded.files.concat(newFiles || []);
+  const uploaded = all.length ? await uploadFilesForRequest(form.department, form.vendorName, form.currency, requestId, all, uploadProgressLabel(btn, 'Uploading'), remote) : [];
+  return { docs: remote.concat(uploaded), localKeys: locals.map(d => d.key) };
+}
+/* After opening a draft, flag attachments whose bytes are not in this browser. */
+async function checkLocalDraftAttachments(){
+  const docs = (modalContext && modalContext.editDocs || []).filter(d => d.local);
+  if (!docs.length) return;
+  const ctx = modalContext;
+  const res = await loadLocalDraftFiles(docs);
+  docs.forEach(d => { if (res.missing.indexOf(d.name) !== -1) localMissingKeys.add(d.key); else localMissingKeys.delete(d.key); });
+  if (modalContext === ctx) renderEditDocChips();
 }
 function uploadProgressLabel(btn, verb){
   return (done, total) => { if (btn && total > 1) btn.textContent = verb + ' ' + done + '/' + total + ' files…'; };
@@ -2903,7 +3057,7 @@ async function handleSaveDraft(){
   setBusy(btn, true, 'Saving…');
   try {
     const requestId = pendingNewRequestId || (pendingNewRequestId = genRequestId());
-    const docs = await uploadFilesForRequest(form.department, form.vendorName, form.currency, requestId, newRequestFiles, uploadProgressLabel(btn, 'Uploading'));
+    const docs = await stashDraftFiles(form.department, form.vendorName, form.currency, requestId, newRequestFiles, btn);
     btn.textContent = 'Saving…';
     const approverEmail = resolveApproverEmail(form.department, currentAccount.username);
     const record = Object.assign({}, form, {
@@ -3008,7 +3162,7 @@ function renderMineTable(){
   body.innerHTML = rows.length ? rows.map(r =>
     '<tr' + urgentRowAttr(r) + ' onclick="openDetail(\'' + r.id + '\',\'mine\')"><td>' + escapeHtml(r.invoiceNumber || '—') + urgentTag(r) + '</td><td>' + escapeHtml(r.department) +
     '</td><td>' + escapeHtml(r.vendorName) + '</td><td>' + fmtAmount(r.amount, r.currency) +
-    '</td><td>' + statusPill(r.status) + '</td><td>' + (r.financeDecisionDate ? fmtDateTime(r.financeDecisionDate) : '') + '</td><td>' + (r.paymentReference ? paymentRefCellHtml(r.paymentReference) : '') + '</td></tr>'
+    '</td><td>' + statusPill(r.status) + '</td><td>' + (r.dueDate ? fmtDate(r.dueDate) : '') + '</td><td>' + (r.paymentReference ? paymentRefCellHtml(r.paymentReference) : '') + '</td></tr>'
   ).join('') : '<tr class="empty-row"><td colspan="7">No requests yet.</td></tr>';
 
   const drafts = mine.filter(r => r.status === STATUS.DRAFT);
@@ -3141,6 +3295,25 @@ async function moveFilesToApprovalFolder(record, approvalIso){
   if (!docLibraryDriveId) throw new Error('Could not find the "' + SP_DOC_LIBRARY_NAME + '" document library.');
   folderIdCache = {};
   let moved = 0, failed = 0, firstError = '';
+  // One folder per request in the approval-period folder too: "<Company>_<n>", next free number there.
+  // Files of this request already placed in the target period (e.g. an earlier partial move) keep that folder.
+  const targetPeriod = approvalPeriodFor(rec);
+  const targetFolder = {};   // entity|dept|oldFolder -> folder name in the target period
+  for (const d of docs) {
+    if (!d || !d.url || !isFinanceDocUrl(d.url)) continue;
+    const pr = financeRelParts(d.url); if (!pr) continue;
+    const pt = pr.slice(); if (pt.length >= 5 && Object.values(ENTITY_FOLDERS).indexOf(pt[0]) !== -1) pt.shift();
+    if (pt.length >= 4 && pt[0] === targetPeriod) targetFolder['placed|' + pt[1]] = pt[2];
+  }
+  async function targetCompanyFor(a){
+    const key = a.entity + '|' + a.parts[1] + '|' + a.company;
+    if (targetFolder[key]) return targetFolder[key];
+    if (targetFolder['placed|' + a.parts[1]]) return (targetFolder[key] = targetFolder['placed|' + a.parts[1]]);
+    const base = stripFolderSuffix(a.company);
+    const parent = [DOC_LIBRARY_ROOT, a.entity, a.period, a.parts[1]].join('/');
+    const max = await maxFolderSuffix(docLibraryDriveId, parent, base);
+    return (targetFolder[key] = base + '_' + (max + 1));
+  }
   for (const d of docs) {
     if (!d || !d.url || !isFinanceDocUrl(d.url)) continue;
     try {
@@ -3152,6 +3325,10 @@ async function moveFilesToApprovalFolder(record, approvalIso){
       if (loc) { item = loc.item; a = analysePathParts(loc.all, rec, opts); }
       else { const f = await locateByName(d.name, rec); item = f.item; a = analysePathParts(f.parts, rec, opts); }   // ...then search by name
       if (!a) continue;
+      if (a.needMove && a.period !== a.parts[0] && a.company === a.parts[2]) {   // moving to the approval period: give it its own numbered folder there
+        a.company = await targetCompanyFor(a);
+        a.prefix = fileNamePrefix(a.entity, a.period, a.parts[1], a.company);
+      }
       const body = {};
       if (a.needMove) body.parentReference = { id: await ensureFolderId([DOC_LIBRARY_ROOT, a.entity, a.period, a.parts[1], a.company].join('/')) };
       if (a.needRename) body.name = prefixedName(a.prefix, item.name);
@@ -3786,6 +3963,7 @@ function openDetail(id, mode){
   document.getElementById('modal-body').innerHTML = renderModalBody(record, mode);
   document.getElementById('modal-overlay').style.display = 'flex';
   if (document.getElementById('bc-panel')) bcPanelInit(record, mode);
+  if (mode === 'edit-draft' || mode === 'edit-submitted') checkLocalDraftAttachments();
 }
 function closeModal(){ document.getElementById('modal-overlay').style.display = 'none'; modalContext = null; }
 
@@ -3805,6 +3983,11 @@ function isFinanceDocUrl(url){
 /* Every document link is resolved by file name when clicked, because SharePoint links are
    path-based and break (404) as soon as the file or one of its folders is moved or renamed. */
 function docAnchorHtml(d, recordId){
+  if (d.local) {
+    const missing = localMissingKeys.has(d.key);
+    return '<span class="muted" title="' + (missing ? 'Saved in a different browser or device' : 'Held in this browser until you submit') + '">' + escapeHtml(d.name) +
+      ' <em class="small">' + (missing ? '(not available on this device)' : '(not uploaded yet)') + '</em></span>';
+  }
   return '<a href="' + escapeHtml(d.url) + '" target="_blank" rel="noopener" data-resolve-finance="1" data-doc-name="' + escapeHtml(d.name) + '"' +
     (recordId ? ' data-record-id="' + escapeHtml(recordId) + '"' : '') + '>' + escapeHtml(d.name) + '</a>';
 }
@@ -4292,7 +4475,7 @@ function renderEditDraftForm(record, introHtml){
       '<label class="field-label">Supporting Documents <span class="req">*</span></label>' +
       '<div id="edit-existing-doc-list" class="doc-link-list" style="margin-bottom:8px;">' + renderEditDocListInner() + '</div>' +
       '<div class="doc-groups">' + docGroupZonesHtml('ed', 'handleEditFileSelect') + '</div>' +
-      '<div class="field-hint">Newly attached files upload to the department\'s SharePoint folder when you save or submit. PO, POD and Invoice files get <code>PO_</code>, <code>POD_</code> or <code>Invoice_</code> in front unless the name already says so.</div>' +
+      '<div class="field-hint">Attached files stay in this browser while this is a draft and upload to the department\'s SharePoint folder only when you submit. PO, POD and Invoice files get <code>PO_</code>, <code>POD_</code> or <code>Invoice_</code> in front unless the name already says so.</div>' +
     '</div>';
 }
 function readEditDraftForm(){
@@ -4334,7 +4517,7 @@ async function handleSaveDraftEdits(itemId){
   if (!form.department) { showToast('Please choose a department before saving.', 'error'); return; }
   setBusy(btn, true, 'Saving…');
   try {
-    const newDocs = modalContext.editFiles.length ? await uploadFilesForRequest(form.department, form.vendorName, form.currency, record.requestId, modalContext.editFiles, uploadProgressLabel(btn, 'Uploading')) : [];
+    const newDocs = await stashDraftFiles(form.department, form.vendorName, form.currency, record.requestId, modalContext.editFiles, btn, modalContext.editDocs);
     const combinedDocs = (modalContext.editDocs || []).concat(newDocs);
     const approverEmail = resolveApproverEmail(form.department, record.requestorEmail);
     const patch = Object.assign({}, form, {
@@ -4344,6 +4527,9 @@ async function handleSaveDraftEdits(itemId){
       historyLog: appendHistory(record.historyLog, currentAccount.username + ' updated this draft.')
     });
     await updateRequestItem(itemId, patch);
+    // Drop browser copies of attachments the user removed.
+    const keptKeys = combinedDocs.filter(d => d.local).map(d => d.key);
+    await deleteLocalDraftFiles(parseDocLinks(record.documentLinks).filter(d => d.local && keptKeys.indexOf(d.key) === -1).map(d => d.key));
     showToast('Draft updated.', 'success');
     await refreshAll();
     openDetail(itemId, 'edit-draft');
@@ -4461,8 +4647,8 @@ async function handleSubmitDraft(itemId){
   const btn = document.getElementById('btn-submit-draft');
   setBusy(btn, true, 'Submitting…');
   try {
-    const newDocs = modalContext.editFiles.length ? await uploadFilesForRequest(form.department, form.vendorName, form.currency, record.requestId, modalContext.editFiles, uploadProgressLabel(btn, 'Uploading')) : [];
-    const combinedDocs = (modalContext.editDocs || []).concat(newDocs);
+    const up = await uploadDraftAttachments(form, record.requestId, modalContext.editDocs, modalContext.editFiles, btn);
+    const combinedDocs = up.docs;
     const approverEmail = resolveApproverEmail(form.department, record.requestorEmail);
     const historyMsg = form.isUrgent
       ? currentAccount.username + ' submitted this URGENT PAYMENT draft for approval (' + form.department + ').'
@@ -4476,6 +4662,7 @@ async function handleSubmitDraft(itemId){
       historyLog: appendHistory(record.historyLog, historyMsg + escalationNote(form.department, record.requestorEmail, approverEmail))
     });
     await updateRequestItem(itemId, patch);
+    await deleteAllLocalDraftFiles(record.requestId);
     await notifyApproverOfNewRequest(Object.assign({}, record, patch));
     showToast('Request ' + record.requestId + ' submitted for approval.', 'success');
     closeModal();
@@ -4487,7 +4674,9 @@ async function handleSubmitDraft(itemId){
 async function deleteDraft(itemId){
   if (!confirm('Delete this draft? This cannot be undone.')) return;
   try {
+    const rec = findRecord(itemId);
     await graphFetch("/sites/" + siteId + "/lists/" + listId + "/items/" + itemId, { method: 'DELETE' });
+    if (rec) await deleteAllLocalDraftFiles(rec.requestId);
     showToast('Draft deleted.', 'success');
     closeModal();
     await refreshAll();
@@ -4573,7 +4762,7 @@ async function handleWithdrawToDraft(itemId){
       return;
     }
     const docsBefore = parseDocLinks(live.documentLinks);
-    const newDocs = modalContext.editFiles.length ? await uploadFilesForRequest(form.department, form.vendorName, form.currency, live.requestId, modalContext.editFiles, uploadProgressLabel(btn, 'Uploading')) : [];
+    const newDocs = await stashDraftFiles(form.department, form.vendorName, form.currency, live.requestId, modalContext.editFiles, btn, modalContext.editDocs);
     const combinedDocs = (modalContext.editDocs || []).concat(newDocs);
     const approverEmail = resolveApproverEmail(form.department, live.requestorEmail);
     const changeSummary = describeEdits(live, form, docsBefore, combinedDocs);
@@ -4627,7 +4816,7 @@ async function handleResubmitEdits(itemId){
       return;
     }
     const docsBefore = parseDocLinks(live.documentLinks);
-    const newDocs = modalContext.editFiles.length ? await uploadFilesForRequest(form.department, form.vendorName, form.currency, live.requestId, modalContext.editFiles, uploadProgressLabel(btn, 'Uploading')) : [];
+    const newDocs = modalContext.editFiles.length ? await uploadFilesForRequest(form.department, form.vendorName, form.currency, live.requestId, modalContext.editFiles, uploadProgressLabel(btn, 'Uploading'), modalContext.editDocs) : [];
     const combinedDocs = (modalContext.editDocs || []).concat(newDocs);
     const approverEmail = resolveApproverEmail(form.department, live.requestorEmail);
     const changeSummary = describeEdits(live, form, docsBefore, combinedDocs);
