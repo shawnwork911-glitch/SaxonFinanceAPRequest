@@ -733,6 +733,7 @@ html.desk-nav-hidden #tabs{transform:translateX(-100%);visibility:hidden;}
   <div class="grp">Review</div>
   <button class="tab-btn" data-view="approvals" id="tab-approvals" style="display:none;" onclick="switchTab('approvals')"><span class="ico">&#10003;</span>Approvals <span class="count zero" id="count-approvals">0</span></button>
   <button class="tab-btn" data-view="finance" id="tab-finance" style="display:none;" onclick="switchTab('finance')"><span class="ico">&#36;</span>Finance Queue <span class="count zero" id="count-finance">0</span></button>
+  <button class="tab-btn" data-view="dealorders" id="tab-dealorders" style="display:none;" onclick="switchTab('dealorders')"><span class="ico">&#9881;</span>Deal Orders <span class="count zero" id="count-dealorders">0</span></button>
   <div class="grp">Insights</div>
   <button class="tab-btn" data-view="analytics" onclick="switchTab('analytics')"><span class="ico">&#9636;</span>Analytics</button>
   <div class="grp">Admin</div>
@@ -912,6 +913,36 @@ html.desk-nav-hidden #tabs{transform:translateX(-100%);visibility:hidden;}
   </div>
 
   <!-- ============ FINANCE QUEUE ============ -->
+  <!-- ============ DEAL ORDERS (Finance) ============ -->
+  <div class="view" id="view-dealorders">
+    <div class="card">
+      <div class="toolbar-row">
+        <div>
+          <h2 style="margin:0;">Deal Orders – posting progress</h2>
+          <div class="muted small">Draft orders created in the BC Portal from approved deals. Users press Notify Finance there when an order is ready for you; mark it handled here once you have picked it up. The BC status of each order is shown alongside.</div>
+        </div>
+        <div class="filters">
+          <input type="search" class="kw-search" id="dlo-search" placeholder="Search order, deal ID or counterparty" oninput="dloRender()" autocomplete="off">
+          <select class="filter-select" id="dlo-filter" onchange="dloRender()">
+            <option value="notified">Notified – waiting for Finance</option>
+            <option value="ready">Ready in BC (received / shipped, not invoiced)</option>
+            <option value="draft">Waiting in BC (not received / shipped)</option>
+            <option value="invoiced">Invoiced in BC</option>
+            <option value="unknown">Needs a look</option>
+            <option value="handled">Handled by Finance</option>
+            <option value="">All</option>
+          </select>
+          <button type="button" class="btn btn-ghost" onclick="DLO.loaded=false; dloRefresh(); refreshAll();">Refresh</button>
+        </div>
+      </div>
+      <div id="dlo-notes"></div>
+      <table class="data-table">
+        <thead><tr><th>Order</th><th>Deal ID</th><th>Counterparty</th><th>BC company</th><th>Created</th><th>Notice from user</th><th>BC posting status</th><th>AP request</th><th>Files</th><th></th></tr></thead>
+        <tbody id="dlo-table-body"></tbody>
+      </table>
+    </div>
+  </div>
+
   <div class="view" id="view-finance">
     <div class="card">
       <div class="toolbar-row">
@@ -2108,21 +2139,19 @@ function vendorFolderName(vendorName){
 }
 /* ---- One folder PER REQUEST ----
    Every request gets its own folder, even when the company name is the same:
-   The first request for a company gets just "Company A"; the next ones get "Company A_1", "Company A_2", ...
-   The number is the next free one in the parent folder (and in the department's extra-copy folder too,
-   so both copies carry the same name). */
+   "Company A_1", "Company A_2", ... The number is the next free one in the parent folder (and in the
+   department's extra-copy folder too, so both copies carry the same name). */
 function stripFolderSuffix(name){ return String(name || '').replace(/_\d+$/, ''); }
-/* Highest N among sibling folders named "<base>_N" under parentPath. The plain "<base>" folder counts as 0;
-   returns -1 when nothing exists yet (or the parent isn't created yet). */
+/* Highest N among sibling folders named "<base>_N" under parentPath (0 when none / parent not created yet). */
 async function maxFolderSuffix(driveId, parentPath, base){
   const esc = base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const re = new RegExp('^' + esc + '(?:_(\\d+))?$', 'i');
-  let max = -1;
+  const re = new RegExp('^' + esc + '_(\\d+)$', 'i');
+  let max = 0;
   let url = "/drives/" + driveId + "/root:/" + encodeURIComponent(parentPath).replace(/%2F/g, '/') + ":/children?$select=name,folder&$top=999";
   try {
     while (url) {
       const res = await graphFetch(url);
-      (res.value || []).forEach(it => { const m = re.exec(it.name || ''); if (m) max = Math.max(max, m[1] ? parseInt(m[1], 10) : 0); });
+      (res.value || []).forEach(it => { const m = re.exec(it.name || ''); if (m) max = Math.max(max, parseInt(m[1], 10)); });
       url = res['@odata.nextLink'] || '';
     }
   } catch (e) { /* parent folder doesn't exist yet - nothing numbered */ }
@@ -2146,9 +2175,9 @@ async function folderNameForRequest(parents, department, vendorName, requestId, 
       return parts[2];
     }
   }
-  let max = -1;
+  let max = 0;
   for (const par of parents) max = Math.max(max, await maxFolderSuffix(par.driveId, par.path, base));
-  const name = max < 0 ? base : base + '_' + (max + 1);
+  const name = base + '_' + (max + 1);
   requestFolderCache.set(cacheKey, name);
   return name;
 }
@@ -2159,27 +2188,14 @@ async function uploadFilesForRequest(department, vendorName, currency, requestId
   const baseDests = uploadDestinationsFor(department);
   const parentOf = d => d.vendorOnly ? d.root : d.root + '/' + entityFolder + '/' + periodFolder + '/' + department;
   // One folder per request: "<Company>_<n>" (or the request ID when no vendor name was entered yet).
-  const subFolder = await folderNameForRequest(baseDests.filter(d => !d.vendorOnly).map(d => ({ driveId: d.driveId, path: parentOf(d) })), department, vendorName, requestId, existingDocs);
+  const subFolder = await folderNameForRequest(baseDests.map(d => ({ driveId: d.driveId, path: parentOf(d) })), department, vendorName, requestId, existingDocs);
   const namePrefix = RENAME_FILES_ON_UPLOAD ? fileNamePrefix(entityFolder, periodFolder, department, subFolder) : '';
   // dests[0] is the main Finance Documents copy (its links are what the request stores);
   // any further entries are extra copies — see DEPT_UPLOAD_DESTINATIONS.
-  // Extra copies (e.g. Operations) are filed under a month folder of the ACTUAL calendar month, so the
-  // per-company numbering starts again from plain "<Company>" each month: <root>/Nov 2026/Company, Company_1, ...
-  const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  const now = new Date();
-  const monthFolder = monthNames[now.getMonth()] + ' ' + now.getFullYear();
-  const dests = [];
-  for (const d of baseDests) {
-    let folderPath;
-    if (d.vendorOnly) {
-      const monthParent = d.root + '/' + monthFolder;
-      const extraName = await folderNameForRequest([{ driveId: d.driveId, path: monthParent }], department + '#extra|' + monthFolder, vendorName, requestId, []);
-      folderPath = monthParent + '/' + extraName;      // extra copy: <root>/<Mon YYYY>/Company_n
-    } else {
-      folderPath = parentOf(d) + '/' + subFolder;      // main: <root>/Entity/Period/Department/Company_n
-    }
-    dests.push(Object.assign({}, d, { folderPath, cacheKey: d.driveId + '|' + folderPath }));
-  }
+  const dests = baseDests.map(d => {
+    const folderPath = parentOf(d) + '/' + subFolder;   // main: <root>/Entity/Period/Department/Company_n   extra copy: <root>/Company_n
+    return Object.assign({}, d, { folderPath, cacheKey: d.driveId + '|' + folderPath });
+  });
   const results = new Array(files.length);
   const tasks = []; // { fileIndex, destIndex } still to upload
   files.forEach((f, i) => {
@@ -3130,10 +3146,182 @@ async function handleSubmitRequest(){
 /* ---------------------------------------------------------------------
    Tabs / views
    --------------------------------------------------------------------- */
+/* =====================================================================
+   DEAL ORDERS tab (Finance) — posting progress of the draft orders the BC Portal created from approved deals.
+   The BC Portal ("Deal orders" tab) writes one row per deal order to the SharePoint list below. This tab reads those
+   rows, asks Business Central how far each order has got, and tells Finance what is waiting for them:
+     Purchase order received, not yet invoiced -> check the vendor invoice / AP request and arrange payment
+     Sales order shipped, not yet invoiced     -> raise the sales invoice
+   For purchase orders it also shows the AP request(s) that quote the PO number (PONumbers), so Finance can see at a
+   glance whether the vendor's invoice has already been submitted here.
+   Users press "Notify Finance" in the BC Portal (with an optional note); those notices are the default view here.
+   Finance presses "Mark as handled" to close one (written back to the same list row). A newer notice reopens it.
+   Nothing is written to BC from here.
+   ===================================================================== */
+const DLO_CONFIG = { listName: 'BC Deal Orders' };   // the list created from BC_Deal_Orders_import.xlsx on SP_SITE_PATH
+const DLO = { rows: [], progress: new Map(), loaded: false, loading: false, notes: [], list: null };
+const dloNorm = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+const dloNum = v => Number(String(v || '').replace(/,/g, '')) || 0;
+const dloFmt = n => Number(Number(n).toFixed(5)).toLocaleString(undefined, { maximumFractionDigits: 5 });
+const dloKey = r => r.type + '|' + r.no + '|' + dloNorm(r.company);
+
+async function dloLoadRows(){
+  if (!siteId) await resolveSiteAndList();
+  const lists = await graphFetch('/sites/' + siteId + "/lists?$filter=displayName eq '" + encodeURIComponent(DLO_CONFIG.listName) + "'");
+  if (!lists.value.length) throw new Error('The SharePoint list "' + DLO_CONFIG.listName + '" was not found on ' + SP_SITE_PATH + '. It is created from the BC Portal setup (BC_Deal_Orders_import.xlsx).');
+  const lid = lists.value[0].id;
+  const cols = await graphFetch('/sites/' + siteId + '/lists/' + lid + '/columns?$select=name,displayName');
+  const col = { Title: 'Title' };
+  cols.value.forEach(c => { col[c.displayName] = c.name; });
+  DLO.list = { lid, col };
+  const missing = ['Order Type', 'BC Order No.', 'BC Company', 'Status'].filter(d => !col[d]);
+  if (missing.length) throw new Error('The list "' + DLO_CONFIG.listName + '" is missing these columns: ' + missing.join(', ') + '.');
+  const items = [];
+  let url = '/sites/' + siteId + '/lists/' + lid + '/items?$expand=fields&$top=500';
+  while (url) { const d = await graphFetch(url); items.push(...d.value); url = d['@odata.nextLink']; }
+  return items.map(i => {
+    const g = d => { const n = col[d]; const v = n ? i.fields[n] : ''; return v == null ? '' : String(v).trim(); };
+    return { id: i.id, ref: g('Title'), source: g('Source'), entity: g('Entity'), type: g('Order Type').toUpperCase(), no: g('BC Order No.'),
+             company: g('BC Company'), status: g('Status'), date: g('Created Date'), party: g('Counterparty'), files: g('Files Attached'),
+             pending: g('Files Pending BC'), notified: g('Finance Notified'), notifiedBy: g('Finance Notified By'), note: g('Finance Note'),
+             handledBy: g('Finance Handled By'), handledDate: g('Finance Handled Date'), lastUpload: g('Last Upload Date') };
+  }).filter(r => r.status === 'Created' && r.no && (r.type === 'PO' || r.type === 'SO'))
+    .sort((a, b) => Number(b.id) - Number(a.id));
+}
+
+/* Open orders carry received / shipped / invoiced quantities on their lines. A fully invoiced order leaves the
+   order list and shows up as a posted invoice, found by its order number. */
+async function dloLoadProgress(rows){
+  const out = new Map();
+  const companies = await bcCompanies();
+  const byCompany = new Map();
+  rows.forEach(r => {
+    const c = companies.find(x => dloNorm(x.name) === dloNorm(r.company));
+    const k = c ? c.id : '';
+    if (!byCompany.has(k)) byCompany.set(k, []);
+    byCompany.get(k).push(r);
+  });
+  for (const [cid, list] of byCompany) {
+    if (!cid) { list.forEach(r => out.set(dloKey(r), { state: 'unknown', text: 'BC company "' + r.company + '" not found, or you have no access to it' })); continue; }
+    for (const type of ['PO', 'SO']) {
+      const isPO = type === 'PO';
+      const endpoint = isPO ? 'purchaseOrders' : 'salesOrders', linesKey = isPO ? 'purchaseOrderLines' : 'salesOrderLines', doneKey = isPO ? 'receivedQuantity' : 'shippedQuantity';
+      const verb = isPO ? 'received' : 'shipped';
+      const mine = list.filter(r => r.type === type);
+      for (let i = 0; i < mine.length; i += 12) {
+        const chunk = mine.slice(i, i + 12);
+        const filter = chunk.map(r => 'number eq ' + odataStr(r.no)).join(' or ');
+        let open = [];
+        try { open = (await bcStd(cid, '/' + endpoint + '?$filter=' + encodeURIComponent(filter) + '&$expand=' + linesKey)).value; }
+        catch (e) { chunk.forEach(r => out.set(dloKey(r), { state: 'unknown', text: 'Could not check: ' + e.message })); continue; }
+        for (const r of chunk) {
+          const o = open.find(x => x.number === r.no);
+          if (o) {
+            const ls = (o[linesKey] || []).filter(l => l.lineType === 'Item' && dloNum(l.quantity) > 0);
+            const total = ls.reduce((s, l) => s + dloNum(l.quantity), 0), done = ls.reduce((s, l) => s + dloNum(l[doneKey]), 0), inv = ls.reduce((s, l) => s + dloNum(l.invoicedQuantity), 0);
+            if (!ls.length) out.set(dloKey(r), { state: 'draft', text: 'Draft – no quantities yet' });
+            else if (done === 0) out.set(dloKey(r), { state: 'draft', text: isPO ? 'Draft – not received yet' : 'Draft – not shipped yet' });
+            else if (inv >= total) out.set(dloKey(r), { state: 'invoiced', text: 'Fully invoiced' });
+            else if (done > inv) out.set(dloKey(r), { state: 'ready', total, done, inv,
+              text: (done >= total ? (isPO ? 'Received' : 'Shipped') : 'Part ' + verb) + ' ' + dloFmt(done) + ' / ' + dloFmt(total) + ' – ' + (isPO ? 'check the vendor invoice and arrange payment' : 'raise the sales invoice') });
+            else out.set(dloKey(r), { state: 'draft', text: 'Invoiced ' + dloFmt(inv) + ' / ' + dloFmt(total) + ', the rest not ' + verb + ' yet' });
+          } else {
+            try {
+              const d = await bcStd(cid, '/' + (isPO ? 'purchaseInvoices' : 'salesInvoices') + '?$filter=' + encodeURIComponent('orderNumber eq ' + odataStr(r.no)) + '&$select=number,status');
+              if (d.value.length) out.set(dloKey(r), { state: 'invoiced', text: 'Invoiced (' + d.value.map(x => x.number).join(', ') + ') – ' + d.value.map(x => x.status).join(', ') });
+              else out.set(dloKey(r), { state: 'unknown', text: 'No longer an open order and no posted invoice found – check in BC' });
+            } catch (e) { out.set(dloKey(r), { state: 'unknown', text: 'No longer an open order – check the posted documents in BC' }); }
+          }
+        }
+      }
+    }
+  }
+  return out;
+}
+
+async function dloRefresh(){
+  if (DLO.loading) return;
+  DLO.loading = true; DLO.notes = [];
+  const body = document.getElementById('dlo-table-body');
+  body.innerHTML = '<tr class="empty-row"><td colspan="10">Loading deal orders…</td></tr>';
+  try {
+    DLO.rows = await dloLoadRows();
+    DLO.progress = new Map();
+    dloRender();
+    try { DLO.progress = await dloLoadProgress(DLO.rows); }
+    catch (e) { DLO.notes.push('Posting status: ' + e.message); }
+    DLO.loaded = true;
+  } catch (e) {
+    DLO.rows = []; DLO.notes.push(e.message);
+  } finally { DLO.loading = false; }
+  dloRender();
+}
+function dloShow(){ if (!DLO.loaded && !DLO.loading) dloRefresh(); else dloRender(); }
+
+/* AP requests (this app) that quote a purchase order's number */
+function dloApRequests(poNo){
+  const n = String(poNo || '').toUpperCase();
+  return allItemsCache.filter(r => r.status !== STATUS.DRAFT && poNumberList(r.poNumbers).includes(n));
+}
+/* Finance view of one row: waiting = notified and not handled yet; handled = Finance picked it up */
+const dloWaiting = r => !!r.notified && !r.handledBy;
+async function dloMarkHandled(id, btn){
+  const r = DLO.rows.find(x => x.id === id);
+  if (!r || !DLO.list) return;
+  const c = DLO.list.col;
+  if (!c['Finance Handled By'] || !c['Finance Handled Date']) { showToast('The list "' + DLO_CONFIG.listName + '" needs the columns "Finance Handled By" and "Finance Handled Date" (Single line of text).', 'error'); return; }
+  btn.disabled = true;
+  try {
+    const stamp = new Date().toISOString();
+    await graphFetch('/sites/' + siteId + '/lists/' + DLO.list.lid + '/items/' + id + '/fields',
+      { method: 'PATCH', body: JSON.stringify({ [c['Finance Handled By']]: myEmail(), [c['Finance Handled Date']]: stamp }) });
+    r.handledBy = myEmail(); r.handledDate = stamp;
+    showToast(r.no + ' marked as handled.', 'success');
+  } catch (e) { showToast('Could not mark as handled: ' + e.message, 'error'); btn.disabled = false; }
+  dloRender();
+}
+function dloNoticeCell(r){
+  if (!r.notified) return '<span class="muted small">Not notified</span>';
+  const head = r.handledBy
+    ? '<span class="status-pill verify-ok">Handled by ' + escapeHtml(r.handledBy) + ' ' + escapeHtml(fmtDate(r.handledDate)) + '</span>'
+    : '<span class="status-pill bc-pill-draft">Notified ' + escapeHtml(fmtDate(r.notified)) + ' by ' + escapeHtml(r.notifiedBy || '?') + '</span>';
+  return head + (r.note ? '<div class="small">' + escapeHtml(r.note) + '</div>' : '') +
+    (r.lastUpload && r.lastUpload > r.notified ? '<div><span class="status-pill bc-pill-bad">New files since notice</span></div>' : '');
+}
+function dloRender(){
+  const q = (document.getElementById('dlo-search').value || '').trim().toLowerCase();
+  const view = document.getElementById('dlo-filter').value;
+  const stateOf = r => (DLO.progress.get(dloKey(r)) || { state: DLO.loaded ? 'unknown' : 'loading' }).state;
+  const matches = r => view === '' ? true : view === 'notified' ? dloWaiting(r) : view === 'handled' ? !!r.handledBy : stateOf(r) === view;
+  const waiting = DLO.rows.filter(dloWaiting);
+  const cnt = document.getElementById('count-dealorders');
+  cnt.textContent = waiting.length; cnt.classList.toggle('zero', !waiting.length);
+  const rows = DLO.rows.filter(r => matches(r) && (!q || (r.no + ' ' + r.ref + ' ' + r.party).toLowerCase().includes(q)));
+  document.getElementById('dlo-notes').innerHTML = DLO.notes.map(n => '<div class="muted small" style="color:var(--bad);">' + escapeHtml(n) + '</div>').join('');
+  const pill = (r) => {
+    const p = DLO.progress.get(dloKey(r));
+    if (!p) return '<span class="muted small">' + (DLO.loading || !DLO.loaded ? 'Checking…' : '—') + '</span>';
+    const cls = p.state === 'ready' ? 'bc-pill-draft' : p.state === 'invoiced' ? 'verify-ok' : p.state === 'unknown' ? 'bc-pill-bad' : '';
+    return '<span class="status-pill ' + cls + '">' + escapeHtml(p.text) + '</span>';
+  };
+  const body = document.getElementById('dlo-table-body');
+  body.innerHTML = rows.length ? rows.map(r => {
+    const ap = r.type === 'PO' ? dloApRequests(r.no) : null;
+    const apCell = r.type === 'SO' ? '<span class="muted small">Sales – no AP request</span>'
+      : ap.length ? ap.map(a => escapeHtml(a.requestId) + ' ' + statusPill(a.status)).join('<br>') : '<span class="muted small">No AP request quotes this PO yet</span>';
+    const files = escapeHtml(r.files || '') + (r.pending ? '<div><span class="status-pill bc-pill-bad">Not in BC yet: ' + escapeHtml(r.pending) + '</span></div>' : '');
+    const action = dloWaiting(r) ? '<button type="button" class="btn btn-ghost" onclick="dloMarkHandled(\'' + r.id + '\', this)">Mark as handled</button>' : '';
+    return '<tr style="cursor:default;"><td><b>' + escapeHtml(r.no) + '</b> <span class="muted small">' + (r.type === 'PO' ? 'Purchase' : 'Sales') + '</span></td><td>' + escapeHtml(r.ref) +
+      '</td><td>' + escapeHtml(r.party) + '</td><td>' + escapeHtml(r.company) + '</td><td>' + (r.date ? fmtDate(r.date) : '') +
+      '</td><td>' + dloNoticeCell(r) + '</td><td>' + pill(r) + '</td><td>' + apCell + '</td><td class="small">' + files + '</td><td>' + action + '</td></tr>';
+  }).join('') : '<tr class="empty-row"><td colspan="10">' + (DLO.loaded ? 'No deal orders match.' : 'Loading…') + '</td></tr>';
+}
+
 function switchTab(view){
   currentView = view;
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.view === view));
   document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === 'view-' + view));
+  if (view === 'dealorders') dloShow();
 }
 function setupRoleUI(){
   const badgesEl = document.getElementById('role-badges');
@@ -3147,6 +3335,7 @@ function setupRoleUI(){
   badgesEl.textContent = '\u00B7 ' + badges.slice().reverse().join(' \u00B7 ');
   document.getElementById('tab-approvals').style.display = (depts.length || isSeniorApprover()) ? '' : 'none';
   document.getElementById('tab-finance').style.display = isFinanceUser() ? '' : 'none';
+  document.getElementById('tab-dealorders').style.display = (isFinanceUser() || isAdminUser()) ? '' : 'none';
   document.getElementById('tab-admin').style.display = isAdminUser() ? '' : 'none';
 }
 
@@ -3310,7 +3499,7 @@ async function moveFilesToApprovalFolder(record, approvalIso){
   if (!docLibraryDriveId) throw new Error('Could not find the "' + SP_DOC_LIBRARY_NAME + '" document library.');
   folderIdCache = {};
   let moved = 0, failed = 0, firstError = '';
-  // One folder per request in the approval-period folder too: "<Company>", then "<Company>_<n>", next free name there.
+  // One folder per request in the approval-period folder too: "<Company>_<n>", next free number there.
   // Files of this request already placed in the target period (e.g. an earlier partial move) keep that folder.
   const targetPeriod = approvalPeriodFor(rec);
   const targetFolder = {};   // entity|dept|oldFolder -> folder name in the target period
@@ -3327,7 +3516,7 @@ async function moveFilesToApprovalFolder(record, approvalIso){
     const base = stripFolderSuffix(a.company);
     const parent = [DOC_LIBRARY_ROOT, a.entity, a.period, a.parts[1]].join('/');
     const max = await maxFolderSuffix(docLibraryDriveId, parent, base);
-    return (targetFolder[key] = max < 0 ? base : base + '_' + (max + 1));
+    return (targetFolder[key] = base + '_' + (max + 1));
   }
   for (const d of docs) {
     if (!d || !d.url || !isFinanceDocUrl(d.url)) continue;
@@ -3941,7 +4130,6 @@ function renderAnalyticsList(){
     return '<tr' + urgentRowAttr(r) + ' onclick="openDetail(\'' + r.id + '\',\'' + mode + '\')"><td>' + escapeHtml(r.invoiceNumber || '—') + urgentTag(r) +
       '</td><td>' + escapeHtml(r.department || '') + '</td><td>' + escapeHtml(r.vendorName || '') +
       '</td><td>' + fmtAmount(r.amount, r.currency) + '</td><td>' + statusPill(r.status) +
-      (r.status === STATUS.PENDING_APPROVAL ? '<div style="margin-top:6px;">' + verifyPill(r) + '</div>' : '') +
       '</td><td>' + (r.submittedDate ? fmtDateTime(r.submittedDate) : '') +
       '</td><td>' + (r.paymentReference ? paymentRefCellHtml(r.paymentReference) : '') + '</td></tr>';
   }).join('') : '<tr class="empty-row"><td colspan="7">' + (all.length ? 'No requests match your search.' : 'No requests in this group.') + '</td></tr>';
