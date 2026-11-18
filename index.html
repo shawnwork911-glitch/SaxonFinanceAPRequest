@@ -2108,19 +2108,21 @@ function vendorFolderName(vendorName){
 }
 /* ---- One folder PER REQUEST ----
    Every request gets its own folder, even when the company name is the same:
-   "Company A_1", "Company A_2", ... The number is the next free one in the parent folder (and in the
-   department's extra-copy folder too, so both copies carry the same name). */
+   The first request for a company gets just "Company A"; the next ones get "Company A_1", "Company A_2", ...
+   The number is the next free one in the parent folder (and in the department's extra-copy folder too,
+   so both copies carry the same name). */
 function stripFolderSuffix(name){ return String(name || '').replace(/_\d+$/, ''); }
-/* Highest N among sibling folders named "<base>_N" under parentPath (0 when none / parent not created yet). */
+/* Highest N among sibling folders named "<base>_N" under parentPath. The plain "<base>" folder counts as 0;
+   returns -1 when nothing exists yet (or the parent isn't created yet). */
 async function maxFolderSuffix(driveId, parentPath, base){
   const esc = base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const re = new RegExp('^' + esc + '_(\\d+)$', 'i');
-  let max = 0;
+  const re = new RegExp('^' + esc + '(?:_(\\d+))?$', 'i');
+  let max = -1;
   let url = "/drives/" + driveId + "/root:/" + encodeURIComponent(parentPath).replace(/%2F/g, '/') + ":/children?$select=name,folder&$top=999";
   try {
     while (url) {
       const res = await graphFetch(url);
-      (res.value || []).forEach(it => { const m = re.exec(it.name || ''); if (m) max = Math.max(max, parseInt(m[1], 10)); });
+      (res.value || []).forEach(it => { const m = re.exec(it.name || ''); if (m) max = Math.max(max, m[1] ? parseInt(m[1], 10) : 0); });
       url = res['@odata.nextLink'] || '';
     }
   } catch (e) { /* parent folder doesn't exist yet - nothing numbered */ }
@@ -2144,9 +2146,9 @@ async function folderNameForRequest(parents, department, vendorName, requestId, 
       return parts[2];
     }
   }
-  let max = 0;
+  let max = -1;
   for (const par of parents) max = Math.max(max, await maxFolderSuffix(par.driveId, par.path, base));
-  const name = base + '_' + (max + 1);
+  const name = max < 0 ? base : base + '_' + (max + 1);
   requestFolderCache.set(cacheKey, name);
   return name;
 }
@@ -2157,14 +2159,27 @@ async function uploadFilesForRequest(department, vendorName, currency, requestId
   const baseDests = uploadDestinationsFor(department);
   const parentOf = d => d.vendorOnly ? d.root : d.root + '/' + entityFolder + '/' + periodFolder + '/' + department;
   // One folder per request: "<Company>_<n>" (or the request ID when no vendor name was entered yet).
-  const subFolder = await folderNameForRequest(baseDests.map(d => ({ driveId: d.driveId, path: parentOf(d) })), department, vendorName, requestId, existingDocs);
+  const subFolder = await folderNameForRequest(baseDests.filter(d => !d.vendorOnly).map(d => ({ driveId: d.driveId, path: parentOf(d) })), department, vendorName, requestId, existingDocs);
   const namePrefix = RENAME_FILES_ON_UPLOAD ? fileNamePrefix(entityFolder, periodFolder, department, subFolder) : '';
   // dests[0] is the main Finance Documents copy (its links are what the request stores);
   // any further entries are extra copies — see DEPT_UPLOAD_DESTINATIONS.
-  const dests = baseDests.map(d => {
-    const folderPath = parentOf(d) + '/' + subFolder;   // main: <root>/Entity/Period/Department/Company_n   extra copy: <root>/Company_n
-    return Object.assign({}, d, { folderPath, cacheKey: d.driveId + '|' + folderPath });
-  });
+  // Extra copies (e.g. Operations) are filed under a month folder of the ACTUAL calendar month, so the
+  // per-company numbering starts again from plain "<Company>" each month: <root>/Nov 2026/Company, Company_1, ...
+  const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const now = new Date();
+  const monthFolder = monthNames[now.getMonth()] + ' ' + now.getFullYear();
+  const dests = [];
+  for (const d of baseDests) {
+    let folderPath;
+    if (d.vendorOnly) {
+      const monthParent = d.root + '/' + monthFolder;
+      const extraName = await folderNameForRequest([{ driveId: d.driveId, path: monthParent }], department + '#extra|' + monthFolder, vendorName, requestId, []);
+      folderPath = monthParent + '/' + extraName;      // extra copy: <root>/<Mon YYYY>/Company_n
+    } else {
+      folderPath = parentOf(d) + '/' + subFolder;      // main: <root>/Entity/Period/Department/Company_n
+    }
+    dests.push(Object.assign({}, d, { folderPath, cacheKey: d.driveId + '|' + folderPath }));
+  }
   const results = new Array(files.length);
   const tasks = []; // { fileIndex, destIndex } still to upload
   files.forEach((f, i) => {
@@ -3295,7 +3310,7 @@ async function moveFilesToApprovalFolder(record, approvalIso){
   if (!docLibraryDriveId) throw new Error('Could not find the "' + SP_DOC_LIBRARY_NAME + '" document library.');
   folderIdCache = {};
   let moved = 0, failed = 0, firstError = '';
-  // One folder per request in the approval-period folder too: "<Company>_<n>", next free number there.
+  // One folder per request in the approval-period folder too: "<Company>", then "<Company>_<n>", next free name there.
   // Files of this request already placed in the target period (e.g. an earlier partial move) keep that folder.
   const targetPeriod = approvalPeriodFor(rec);
   const targetFolder = {};   // entity|dept|oldFolder -> folder name in the target period
@@ -3312,7 +3327,7 @@ async function moveFilesToApprovalFolder(record, approvalIso){
     const base = stripFolderSuffix(a.company);
     const parent = [DOC_LIBRARY_ROOT, a.entity, a.period, a.parts[1]].join('/');
     const max = await maxFolderSuffix(docLibraryDriveId, parent, base);
-    return (targetFolder[key] = base + '_' + (max + 1));
+    return (targetFolder[key] = max < 0 ? base : base + '_' + (max + 1));
   }
   for (const d of docs) {
     if (!d || !d.url || !isFinanceDocUrl(d.url)) continue;
@@ -3926,6 +3941,7 @@ function renderAnalyticsList(){
     return '<tr' + urgentRowAttr(r) + ' onclick="openDetail(\'' + r.id + '\',\'' + mode + '\')"><td>' + escapeHtml(r.invoiceNumber || '—') + urgentTag(r) +
       '</td><td>' + escapeHtml(r.department || '') + '</td><td>' + escapeHtml(r.vendorName || '') +
       '</td><td>' + fmtAmount(r.amount, r.currency) + '</td><td>' + statusPill(r.status) +
+      (r.status === STATUS.PENDING_APPROVAL ? '<div style="margin-top:6px;">' + verifyPill(r) + '</div>' : '') +
       '</td><td>' + (r.submittedDate ? fmtDateTime(r.submittedDate) : '') +
       '</td><td>' + (r.paymentReference ? paymentRefCellHtml(r.paymentReference) : '') + '</td></tr>';
   }).join('') : '<tr class="empty-row"><td colspan="7">' + (all.length ? 'No requests match your search.' : 'No requests in this group.') + '</td></tr>';
