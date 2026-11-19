@@ -3286,7 +3286,7 @@ function dloShow(){ if (!DLO.loaded && !DLO.loading) dloRefresh(); else dloRende
    document libraries (exact file-name match). If the same name exists in several places, the copy whose
    folder path mentions the order no. / deal ID wins. Results are cached for the session. */
 const DLO_FILE_CACHE = new Map();
-const DLO_FILES_FOLDER_LINK = 'https://saxonrenewables.sharepoint.com/:f:/s/Operations/IgAvAnyFFjoXS4jGsdifzz99ARYbQQep0Ltcb9Hvxv08P1k?e=eEjqnO';   // "Agreement Files Additions"
+const DLO_FILES_FOLDER = 'Agreement Files Additions';   // folder inside the "Process Improvement" library (Operations site) where the BC Portal saves deal order files
 /* "Files Links" column written by the BC Portal. Accepts a JSON array ([{name,url}] or [url]) or any text that contains the
    URLs (one per line, or "name | url" pairs). Each file name is paired with its URL by file name, else by position. */
 function dloLinkMap(r){
@@ -3329,14 +3329,11 @@ async function dloFindFileUrl(name, r){
   if (DLO.folder === undefined) {
     DLO.folder = null;
     try {
-      const enc = 'u!' + btoa(DLO_FILES_FOLDER_LINK).replace(/=+$/, '').replace(/\//g, '_').replace(/\+/g, '-');
-      const it = await graphFetch('/shares/' + enc + '/driveItem?$select=id,name,webUrl,parentReference');
-      const drvId = it.parentReference && it.parentReference.driveId;
-      if (drvId) {
-        const dv = await graphFetch('/drives/' + drvId + '?$select=id,name,webUrl');
-        DLO.folder = { id: drvId, webUrl: dv.webUrl, base: '/drives/' + drvId + '/items/' + it.id };
-      }
-    } catch (e) { console.warn('[deal order file] could not open the files folder link:', e && e.message); }
+      if (!docLibraryDriveId) await resolveDocLibraryDrive();
+      const it = await graphFetch('/drives/' + docLibraryDriveId + '/root:/' + encodeURIComponent(DLO_FILES_FOLDER).replace(/%2F/g, '/') + '?$select=id,name,webUrl');
+      const dv = await graphFetch('/drives/' + docLibraryDriveId + '?$select=id,name,webUrl');
+      DLO.folder = { id: docLibraryDriveId, webUrl: dv.webUrl, base: '/drives/' + docLibraryDriveId + '/items/' + it.id };
+    } catch (e) { console.warn('[deal order file] could not open the files folder:', e && e.message); }
   }
   if (DLO.folder) {   // exact path first: the folder is flat and files are named "<deal ID> - <file name>"
     for (const cand of [(r.ref ? r.ref + ' - ' : '') + name, name]) {
