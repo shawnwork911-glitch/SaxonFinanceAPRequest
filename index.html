@@ -261,6 +261,25 @@
   .empty-row td { text-align: center; color: var(--sub); padding: 30px 12px; cursor: default; }
   .empty-row:hover { background: transparent !important; }
 
+  /* ---- Deal Orders table: fixed layout so all 10 columns fit inside the card ---- */
+  .dlo-scroll { overflow-x: auto; max-width: 100%; }
+  table.dlo-table { table-layout: fixed; min-width: 940px; font-size: 12.5px; }
+  table.dlo-table th, table.dlo-table td { padding: 9px 8px; vertical-align: top; overflow-wrap: anywhere; word-break: normal; }
+  table.dlo-table thead th { vertical-align: bottom; }
+  table.dlo-table .status-pill { white-space: normal; display: inline-block; max-width: 100%; line-height: 1.35; border-radius: 10px; }
+  table.dlo-table col.c-order { width: 8%; }
+  table.dlo-table col.c-deal { width: 8%; }
+  table.dlo-table col.c-party { width: 13%; }
+  table.dlo-table col.c-company { width: 11%; }
+  table.dlo-table col.c-created { width: 7%; }
+  table.dlo-table col.c-notice { width: 19%; }
+  table.dlo-table col.c-bc { width: 11%; }
+  table.dlo-table col.c-ap { width: 9%; }
+  table.dlo-table col.c-files { width: 8%; }
+  table.dlo-table col.c-act { width: 96px; }
+  table.dlo-table td:last-child .btn { padding: 6px 8px; font-size: 12px; white-space: normal; line-height: 1.25; }
+  @media (max-width: 640px) { table.dlo-table { min-width: 0; table-layout: auto; } table.dlo-table colgroup { display: none; } }
+
   .status-pill {
     display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: .02em;
     padding: 3px 10px; border-radius: 12px; white-space: nowrap;
@@ -936,10 +955,13 @@ html.desk-nav-hidden #tabs{transform:translateX(-100%);visibility:hidden;}
         </div>
       </div>
       <div id="dlo-notes"></div>
-      <table class="data-table">
+      <div class="dlo-scroll">
+      <table class="data-table dlo-table">
+        <colgroup><col class="c-order"><col class="c-deal"><col class="c-party"><col class="c-company"><col class="c-created"><col class="c-notice"><col class="c-bc"><col class="c-ap"><col class="c-files"><col class="c-act"></colgroup>
         <thead><tr><th>Order</th><th>Deal ID</th><th>Counterparty</th><th>BC company</th><th>Created</th><th>Notice from user</th><th>BC posting status</th><th>AP request</th><th>Files</th><th></th></tr></thead>
         <tbody id="dlo-table-body"></tbody>
       </table>
+      </div>
     </div>
   </div>
 
