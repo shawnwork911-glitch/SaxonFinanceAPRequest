@@ -3474,11 +3474,16 @@ function dloRender(){
    The flow clears "Bank Details" after it has used them, so bank numbers do not stay in the list.
    ===================================================================== */
 const WISE_CONFIG = { listName: 'Wise Payments' };
-const WISE_TEMPLATES = {   // starting points only - the exact fields Wise needs depend on currency and country
-  iban:      { legalType: 'BUSINESS', IBAN: '' },
-  sort_code: { legalType: 'BUSINESS', sortCode: '', accountNumber: '' },
-  other:     {}
+/* Bank detail forms. Finance fills in plain fields; the page turns them into the "details" Wise expects.
+   The exact fields Wise needs depend on currency and country, so confirm a new currency with a small test:
+   if a field is missing or wrong, Wise's message appears in the Wise Message column. */
+const WISE_PRESETS = {
+  swift:     { label: 'SWIFT / BIC + account number (e.g. MYR, SGD)', type: 'swift_code', fields: [{ k: 'swiftCode', label: 'SWIFT / BIC code' }, { k: 'accountNumber', label: 'Account number' }] },
+  iban:      { label: 'IBAN (Europe)', type: 'iban', fields: [{ k: 'IBAN', label: 'IBAN' }] },
+  sort_code: { label: 'UK sort code + account number', type: 'sort_code', fields: [{ k: 'sortCode', label: 'Sort code' }, { k: 'accountNumber', label: 'Account number' }] },
+  other:     { label: 'Other (enter the field names Wise asks for)', type: '', fields: [] }
 };
+const wisePresetFor = cur => cur === 'GBP' ? 'sort_code' : cur === 'EUR' ? 'iban' : 'swift';
 let WISE = { lid: null, col: null };
 async function wiseList(){
   if (WISE.lid) return WISE;
@@ -3509,25 +3514,62 @@ function wisePanelHtml(record){
   if (!isFinanceUser()) return '';
   return '<hr class="section-divider"><div id="wise-panel">' +
     '<h3 style="margin:0 0 6px;">Pay via Wise</h3>' +
-    '<div class="field-hint" style="margin-bottom:10px;">Creates a Wise transfer of <b>' + escapeHtml(record.currency) + ' ' + escapeHtml(String(record.amount)) + '</b> to <b>' + escapeHtml(record.vendorName) + '</b> and funds it from your Wise balance. This sends real money. Bank details are used once and are not kept.</div>' +
+    '<div class="field-hint" style="margin-bottom:10px;">Creates a Wise transfer of <b>' + escapeHtml(record.currency) + ' ' + escapeHtml(String(record.amount)) + '</b> to <b>' + escapeHtml(record.vendorName) + '</b> in Wise. Depending on how the flow is set up, it is either left as a draft for you to fund in Wise, or funded straight from your Wise balance (real money). Bank details are used once and are not kept.</div>' +
     '<div id="wise-status" class="field-hint" style="margin-bottom:10px;">Checking for earlier Wise payments…</div>' +
     '<div class="grid-2">' +
       '<div class="field-row"><label class="field-label">Account holder name <span class="req">*</span></label><input class="text-field" id="wise-holder" value="' + escapeHtml(record.vendorName || '') + '"></div>' +
       '<div class="field-row"><label class="field-label">Reference on the transfer</label><input class="text-field" id="wise-ref" maxlength="35" value="' + escapeHtml(String(record.requestId || '').slice(0, 35)) + '"></div>' +
     '</div>' +
-    '<div class="field-row"><label class="field-label">Recipient type <span class="req">*</span></label>' +
-      '<select class="text-field" id="wise-type" onchange="wiseTypeChanged()"><option value="iban">IBAN</option><option value="sort_code">UK sort code</option><option value="other">Other – enter the type and details as Wise requires</option></select></div>' +
-    '<div class="field-row" id="wise-othertype-row" style="display:none;"><label class="field-label">Wise recipient type</label><input class="text-field" id="wise-othertype" placeholder="e.g. aba, swift_code, singapore_bank … exactly as Wise names it"></div>' +
-    '<div class="field-row"><label class="field-label">Bank details (JSON) <span class="req">*</span></label><textarea class="text-field" id="wise-details" rows="6" style="font-family:ui-monospace,Consolas,monospace;font-size:12.5px;"></textarea>' +
-      '<div class="field-hint">Use the field names Wise shows when you add this recipient in Wise (Recipient &gt; Add &gt; the currency). Example for a UK account: {"legalType":"BUSINESS","sortCode":"040075","accountNumber":"37778842"}</div></div>' +
-    '<div class="btn-row"><button type="button" class="btn btn-gold" id="wise-send-btn" onclick="wiseSubmit()">Send to Wise and fund</button></div>' +
+    '<div class="grid-2">' +
+      '<div class="field-row"><label class="field-label">Recipient account type <span class="req">*</span></label>' +
+        '<select class="text-field" id="wise-type" onchange="wiseRenderFields()">' + Object.keys(WISE_PRESETS).map(k => '<option value="' + k + '"' + (k === wisePresetFor(record.currency) ? ' selected' : '') + '>' + escapeHtml(WISE_PRESETS[k].label) + '</option>').join('') + '</select></div>' +
+      '<div class="field-row"><label class="field-label">Account holder is a</label><select class="text-field" id="wise-legal"><option value="BUSINESS">Business</option><option value="PRIVATE">Individual</option></select></div>' +
+    '</div>' +
+    '<div id="wise-fields"></div>' +
+    '<div class="btn-row"><button type="button" class="btn btn-gold" id="wise-send-btn" onclick="wiseSubmit()">Send to Wise</button></div>' +
   '</div>';
 }
-function wiseTypeChanged(){
-  const t = document.getElementById('wise-type').value;
-  document.getElementById('wise-othertype-row').style.display = t === 'other' ? '' : 'none';
-  const box = document.getElementById('wise-details');
-  if (!box.value.trim() || Object.values(WISE_TEMPLATES).some(tp => JSON.stringify(tp, null, 2) === box.value.trim())) box.value = JSON.stringify(WISE_TEMPLATES[t], null, 2);
+function wiseRenderFields(){
+  const box = document.getElementById('wise-fields'); if (!box) return;
+  const pre = WISE_PRESETS[document.getElementById('wise-type').value];
+  if (pre.fields.length) {
+    box.innerHTML = '<div class="grid-2">' + pre.fields.map(f => '<div class="field-row"><label class="field-label">' + escapeHtml(f.label) + ' <span class="req">*</span></label><input class="text-field wise-field" data-k="' + escapeHtml(f.k) + '" autocomplete="off"></div>').join('') + '</div>';
+  } else {
+    box.innerHTML = '<div class="field-row"><label class="field-label">Wise recipient type <span class="req">*</span></label><input class="text-field" id="wise-othertype" placeholder="exactly as Wise names it, e.g. aba" autocomplete="off"></div>' +
+      '<div id="wise-otherrows"></div><div class="btn-row" style="justify-content:flex-start;margin-top:6px;"><button type="button" class="btn btn-ghost" onclick="wiseAddRow()">+ Add field</button></div>';
+    wiseAddRow(); wiseAddRow();
+  }
+}
+function wiseAddRow(){
+  const el = document.getElementById('wise-otherrows'); if (!el) return;
+  const d = document.createElement('div'); d.className = 'grid-2 wise-otherrow';
+  d.innerHTML = '<div class="field-row"><input class="text-field wise-k" placeholder="Field name (e.g. accountNumber)" autocomplete="off"></div><div class="field-row"><input class="text-field wise-v" placeholder="Value" autocomplete="off"></div>';
+  el.appendChild(d);
+}
+/* Reads the fields into the details object Wise expects. Returns { type, details } or null after showing why not. */
+function wiseReadDetails(){
+  const key = document.getElementById('wise-type').value, pre = WISE_PRESETS[key];
+  const details = { legalType: document.getElementById('wise-legal').value };
+  let type = pre.type;
+  if (pre.fields.length) {
+    for (const inp of document.querySelectorAll('#wise-fields .wise-field')) {
+      const v = inp.value.trim();
+      if (!v) { showToast('Please fill in: ' + inp.closest('.field-row').querySelector('label').textContent.replace('*', '').trim() + '.', 'error'); return null; }
+      details[inp.getAttribute('data-k')] = v.replace(/\s+/g, '');
+    }
+  } else {
+    type = (document.getElementById('wise-othertype').value || '').trim();
+    if (!type) { showToast('Please enter the Wise recipient type.', 'error'); return null; }
+    let n = 0;
+    for (const row of document.querySelectorAll('.wise-otherrow')) {
+      const k = row.querySelector('.wise-k').value.trim(), v = row.querySelector('.wise-v').value.trim();
+      if (!k && !v) continue;
+      if (!k || !v) { showToast('Each extra field needs both a name and a value.', 'error'); return null; }
+      details[k] = v; n++;
+    }
+    if (!n) { showToast('Add at least one bank detail field.', 'error'); return null; }
+  }
+  return { type, details };
 }
 async function wiseRefreshPanel(recordId){
   const record = findRecord(recordId);
@@ -3535,8 +3577,7 @@ async function wiseRefreshPanel(recordId){
   if (!record || !el) return null;
   try {
     const rows = await wiseRows(record);
-    const box = document.getElementById('wise-details');
-    if (box && !box.value.trim()) box.value = JSON.stringify(WISE_TEMPLATES.iban, null, 2);
+    if (!document.querySelector('#wise-fields .wise-field, #wise-fields #wise-othertype')) wiseRenderFields();
     if (!rows.length) { el.textContent = 'No Wise payment has been sent for this request yet.'; return null; }
     el.innerHTML = rows.map(r => '<div><b>' + escapeHtml(r.status || 'Queued') + '</b> – ' + escapeHtml(r.currency) + ' ' + escapeHtml(r.amount) + ' by ' + escapeHtml(r.by) +
       (r.transfer ? ' · Wise transfer ' + escapeHtml(r.transfer) : '') + (r.message ? '<div class="small">' + escapeHtml(r.message) + '</div>' : '') + '</div>').join('');
@@ -3549,17 +3590,14 @@ async function wiseSubmit(){
   const btn = document.getElementById('wise-send-btn');
   const holder = document.getElementById('wise-holder').value.trim();
   const ref = document.getElementById('wise-ref').value.trim();
-  let type = document.getElementById('wise-type').value;
-  if (type === 'other') type = document.getElementById('wise-othertype').value.trim();
-  const raw = document.getElementById('wise-details').value.trim();
-  if (!holder || !type || !raw) { showToast('Please fill in the account holder, recipient type and bank details.', 'error'); return; }
-  let details;
-  try { details = JSON.parse(raw); } catch (e) { showToast('The bank details are not valid JSON.', 'error'); return; }
-  if (!details || typeof details !== 'object' || Array.isArray(details) || Object.values(details).some(v => v === '')) { showToast('Fill in every bank detail field (none can be empty).', 'error'); return; }
+  if (!holder) { showToast('Please enter the account holder name.', 'error'); return; }
+  const read = wiseReadDetails();
+  if (!read) return;
+  const type = read.type, details = read.details;
   const amount = Number(record.amount);
   if (!(amount > 0) || !record.currency) { showToast('This request has no valid amount / currency.', 'error'); return; }
   if (record.status !== STATUS.PENDING_FINANCE) { showToast('Only requests that are Approved – Pending Finance can be paid through Wise.', 'error'); return; }
-  const sure = prompt('This will send ' + record.currency + ' ' + amount.toLocaleString() + ' to "' + holder + '" through Wise and fund it from your Wise balance.\n\nType the currency and amount exactly as ' + record.currency + ' ' + amount + ' to confirm:');
+  const sure = prompt('This will send ' + record.currency + ' ' + amount.toLocaleString() + ' to "' + holder + '" through Wise (it may be funded automatically, depending on the flow setting).\n\nType the currency and amount exactly as ' + record.currency + ' ' + amount + ' to confirm:');
   if (sure === null) return;
   if (sure.replace(/[\s,]/g, '').toUpperCase() !== (record.currency + amount).replace(/[\s,]/g, '').toUpperCase()) { showToast('That did not match, so nothing was sent.', 'error'); return; }
   try {
@@ -3576,7 +3614,7 @@ async function wiseSubmit(){
     await graphFetch('/sites/' + siteId + '/lists/' + lid + '/items', { method: 'POST', body: JSON.stringify({ fields: f }) });
     await updateRequestItem(record.id, { historyLog: appendHistory(record.historyLog, currentAccount.username + ' (Finance) sent ' + record.currency + ' ' + amount + ' to Wise for payment.') });
     showToast('Sent to Wise – waiting for Power Automate…', 'success');
-    document.getElementById('wise-details').value = '';
+    document.querySelectorAll('#wise-fields input').forEach(x => { x.value = ''; });
     for (let i = 0; i < 24; i++) {   // poll up to ~2 minutes
       await new Promise(r => setTimeout(r, 5000));
       if (!document.getElementById('wise-status')) return;   // modal closed
@@ -5064,7 +5102,7 @@ function renderModalBody(record, mode){
   if (bcPanelApplies(record, mode)) html += bcPanelHtml(record, mode);
   if (mode === 'finance') {
     html += wisePanelHtml(record);
-    setTimeout(() => wiseRefreshPanel(record.id), 60);
+    setTimeout(() => { wiseRenderFields(); wiseRefreshPanel(record.id); }, 60);
     html += '<hr class="section-divider">' +
       paymentRefFieldsHtml('payment-ref', record, true) +
       '<div class="field-row"><label class="field-label">Comments (required when requesting more info or rejecting)</label>' +
