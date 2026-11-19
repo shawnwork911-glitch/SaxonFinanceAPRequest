@@ -272,10 +272,11 @@
   table.dlo-table col.c-party { width: 13%; }
   table.dlo-table col.c-company { width: 11%; }
   table.dlo-table col.c-created { width: 7%; }
-  table.dlo-table col.c-notice { width: 19%; }
-  table.dlo-table col.c-bc { width: 11%; }
+  table.dlo-table col.c-notice { width: 16%; }
+  table.dlo-table col.c-bc { width: 10%; }
   table.dlo-table col.c-ap { width: 9%; }
-  table.dlo-table col.c-files { width: 8%; }
+  table.dlo-table col.c-files { width: 13%; }
+  table.dlo-table td a[data-dlo-file] { color: var(--accent); text-decoration: underline; cursor: pointer; }
   table.dlo-table col.c-act { width: 96px; }
   table.dlo-table td:last-child .btn { padding: 6px 8px; font-size: 12px; white-space: normal; line-height: 1.25; }
   @media (max-width: 640px) { table.dlo-table { min-width: 0; table-layout: auto; } table.dlo-table colgroup { display: none; } }
@@ -3280,6 +3281,93 @@ async function dloRefresh(){
 }
 function dloShow(){ if (!DLO.loaded && !DLO.loading) dloRefresh(); else dloRender(); }
 
+/* ---- Files tied to an order: open the copies the BC Portal saved in SharePoint ----
+   The list row only stores the file names ("Files Attached"), so each name is looked up in this site's
+   document libraries (exact file-name match). If the same name exists in several places, the copy whose
+   folder path mentions the order no. / deal ID wins. Results are cached for the session. */
+const DLO_FILE_CACHE = new Map();
+const DLO_FILES_FOLDER_LINK = 'https://saxonrenewables.sharepoint.com/:f:/s/Operations/IgAvAnyFFjoXS4jGsdifzz99ARYbQQep0Ltcb9Hvxv08P1k?e=eEjqnO';   // "Agreement Files Additions"
+function dloFileNames(text){
+  return String(text || '').split(/\s*[;\n|]\s*/).flatMap(p => p.split(/(?<=\.[A-Za-z0-9]{2,5}),\s+/)).map(s => s.trim()).filter(Boolean);
+}
+async function dloFindFileUrl(name, r){
+  const key = dloNorm(name) + '|' + r.id;
+  if (DLO_FILE_CACHE.has(key)) return DLO_FILE_CACHE.get(key);
+  if (!siteId) await resolveSiteAndList();
+  if (!DLO.drives) {
+    const d = await graphFetch('/sites/' + siteId + '/drives?$select=id,name,webUrl');
+    DLO.drives = d.value || [];
+  }
+  const norm = x => String(x || '').trim().toLowerCase();
+  // Saved in SharePoint as "<deal ID> - <file name>"; also accept the plain name in case it was stored without the prefix.
+  const wanted = [(r.ref ? r.ref + ' - ' : '') + name, name].map(norm);
+  const base = ((r.ref ? r.ref + ' - ' : '') + name).replace(/\.[^.]+$/, '');
+  const tokens = base.split(/[^A-Za-z0-9]+/).filter(t => t.length >= 4);
+  const longest = tokens.slice().sort((a, b) => b.length - a.length)[0];
+  const plainBase = name.replace(/\.[^.]+$/, '').replace(/[()&'#%,+]/g, ' ').replace(/\s+/g, ' ').trim();
+  const queries = [base.replace(/[()&'#%,+]/g, ' ').replace(/\s+/g, ' ').trim(), plainBase, longest || ''].filter((q, i, a) => q && a.indexOf(q) === i);
+  const hits = [];
+  // Search the Agreement Files Additions folder first (where the BC Portal saves them), then every library on the site.
+  if (DLO.folder === undefined) {
+    DLO.folder = null;
+    try {
+      const enc = 'u!' + btoa(DLO_FILES_FOLDER_LINK).replace(/=+$/, '').replace(/\//g, '_').replace(/\+/g, '-');
+      const it = await graphFetch('/shares/' + enc + '/driveItem?$select=id,name,webUrl,parentReference');
+      const drvId = it.parentReference && it.parentReference.driveId;
+      if (drvId) {
+        const dv = await graphFetch('/drives/' + drvId + '?$select=id,name,webUrl');
+        DLO.folder = { id: drvId, webUrl: dv.webUrl, base: '/drives/' + drvId + '/items/' + it.id };
+      }
+    } catch (e) { console.warn('[deal order file] could not open the files folder link:', e && e.message); }
+  }
+  const targets = (DLO.folder ? [{ id: DLO.folder.id, webUrl: DLO.folder.webUrl, base: DLO.folder.base }] : [])
+    .concat(DLO.drives.map(d => ({ id: d.id, webUrl: d.webUrl, base: '/drives/' + d.id + '/root' })));
+  for (const q of queries) {
+    for (const drv of targets) {
+      try {
+        const res = await graphFetch(drv.base + "/search(q='" + encodeURIComponent(q.replace(/'/g, "''")) + "')?$select=id,name,webUrl,parentReference&$top=100");
+        for (const it of (res.value || [])) {
+          if (!it.webUrl) continue;
+          if (wanted.indexOf(norm(it.name)) === -1) continue;
+          const pp = decodeURIComponent(String((it.parentReference && it.parentReference.path) || ''));
+          let u = it.webUrl;
+          if (/DispForm\.aspx/i.test(u) && drv.webUrl) {
+            const at = pp.indexOf('root:');
+            const folder = at === -1 ? '' : pp.slice(at + 5).replace(/^\/+/, '');
+            u = drv.webUrl.replace(/\/+$/, '') + '/' + encodeURIComponent((folder ? folder + '/' : '') + it.name).replace(/%2F/g, '/');
+          }
+          hits.push({ url: u, path: pp });
+        }
+      } catch (e) { console.warn('[deal order file] search failed', drv.id, e && e.message); }
+      if (hits.length && drv === targets[0] && DLO.folder) break;   // found in the Agreement Files Additions folder
+    }
+    if (hits.length) break;
+  }
+  const keys = [r.no, r.ref].map(x => dloNorm(x)).filter(Boolean);
+  const best = hits.find(h => keys.some(k => dloNorm(h.path).includes(k))) || hits[0] || null;
+  const url = best ? best.url : null;
+  if (url) DLO_FILE_CACHE.set(key, url);
+  return url;
+}
+document.addEventListener('click', async function(ev){
+  const a = ev.target.closest && ev.target.closest('a[data-dlo-file]');
+  if (!a) return;
+  ev.preventDefault();
+  const name = decodeURIComponent(a.getAttribute('data-dlo-file'));
+  const r = DLO.rows.find(x => x.id === a.getAttribute('data-dlo-row'));
+  if (!r) return;
+  const w = window.open('', '_blank');   // open now so the popup blocker allows it
+  a.style.opacity = '.6';
+  let url = null;
+  try { url = await dloFindFileUrl(name, r); } catch (e) { url = null; }
+  a.style.opacity = '';
+  if (url && w) { w.location.href = url; }
+  else {
+    if (w) w.close();
+    showToast('Could not find "' + name + '" in SharePoint. It may not be uploaded yet, or you may not have access to that folder.', 'error');
+  }
+});
+
 /* AP requests (this app) that quote a purchase order's number */
 function dloApRequests(poNo){
   const n = String(poNo || '').toUpperCase();
@@ -3331,7 +3419,7 @@ function dloRender(){
     const ap = r.type === 'PO' ? dloApRequests(r.no) : null;
     const apCell = r.type === 'SO' ? '<span class="muted small">Sales – no AP request</span>'
       : ap.length ? ap.map(a => escapeHtml(a.requestId) + ' ' + statusPill(a.status)).join('<br>') : '<span class="muted small">No AP request quotes this PO yet</span>';
-    const files = escapeHtml(r.files || '') + (r.pending ? '<div><span class="status-pill bc-pill-bad">Not in BC yet: ' + escapeHtml(r.pending) + '</span></div>' : '');
+    const files = dloFileNames(r.files).map(n => '<div><a href="#" data-dlo-file="' + encodeURIComponent(n) + '" data-dlo-row="' + escapeHtml(r.id) + '" title="Open in SharePoint">' + escapeHtml(n) + '</a></div>').join('') + (r.pending ? '<div><span class="status-pill bc-pill-bad">Not in BC yet: ' + escapeHtml(r.pending) + '</span></div>' : '');
     const action = dloWaiting(r) ? '<button type="button" class="btn btn-ghost" onclick="dloMarkHandled(\'' + r.id + '\', this)">Mark as handled</button>' : '';
     return '<tr style="cursor:default;"><td><b>' + escapeHtml(r.no) + '</b> <span class="muted small">' + (r.type === 'PO' ? 'Purchase' : 'Sales') + '</span></td><td>' + escapeHtml(r.ref) +
       '</td><td>' + escapeHtml(r.party) + '</td><td>' + escapeHtml(r.company) + '</td><td>' + (r.date ? fmtDate(r.date) : '') +
